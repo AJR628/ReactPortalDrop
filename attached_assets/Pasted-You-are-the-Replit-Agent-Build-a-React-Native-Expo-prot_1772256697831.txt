@@ -1,0 +1,135 @@
+You are the Replit Agent. Build a React Native (Expo) prototype of a 2D physics puzzle game: “Portal Drop”.
+
+PRIMARY GOAL
+Produce a single playable screen where:
+- User taps the arena boundary to place an EXIT portal (snaps to perimeter, clamped away from corners).
+- Press Start/Drop: a ball drops from near the top INSIDE the arena under gravity.
+- When the ball overlaps the ENTRY portal (fixed on the bottom wall, slightly inside), it teleports to the EXIT portal.
+- Teleport preserves speed and rotates velocity based on portal inward normals (arena-emergent rule).
+- Reset returns to placement-ready and freezes physics again.
+This is a prototype, not production polish.
+
+HARD CONSTRAINTS (ANTI-DRIFT)
+- Expo app only. No backend, no auth, no ads, no purchases, no navigation, no levels, no scoring, no particles, no sound.
+- One screen only. Minimal code structure, but clear separation of concerns.
+- Deterministic feel: fixed timestep-ish loop, consistent teleport rule, short cooldown.
+- Implement only the MVP behaviors listed under ACCEPTANCE CHECKS.
+- Create an SSOT doc in repo and keep code aligned to it.
+
+STACK (choose this exactly)
+- Expo + React Native
+- matter-js for physics
+- react-native-game-engine for the update loop/render state
+- Render entities with simple <View> blocks (no assets required)
+
+FILES TO CREATE (exact)
+1) docs/PORTAL_DROP_RN_SPEC.md  (SSOT)
+2) src/constants.ts
+3) src/math.ts
+4) src/snap.ts
+5) src/physics.ts
+6) src/entities.tsx
+7) App.tsx
+
+SSOT (docs/PORTAL_DROP_RN_SPEC.md) must include:
+- Core loop + states: PlacingPortal/Ready/Running (Reset returns to Ready)
+- ArenaRect (authoritative): computed at runtime but fixed ratio 10:16 and stored as a Rect with left/right/top/bottom. DO NOT use wall body bounds for snapping.
+- Coordinate system note: React Native & Matter use y-down. Define inward normals accordingly:
+  - Top wall inward normal = (0, +1)
+  - Bottom wall inward normal = (0, -1)
+  - Left wall inward normal = (+1, 0)
+  - Right wall inward normal = (-1, 0)
+- Teleport rule (authoritative):
+  angle = signedAngle(entryNormal, exitNormal)
+  vOut = rotate(vIn, angle)
+  preserve speed magnitude
+  teleport position = exitPos + exitNormal * offset
+  cooldown = 150ms
+- Snap-to-boundary algorithm:
+  - nearest edge of ArenaRect perimeter
+  - clamp along that edge by (portalHalf + cornerMargin) (cornerMargin default 16px)
+  - optional quantize step (OFF by default)
+- Critical rules:
+  - Teleport triggers ONLY on ENTRY portal overlap; EXIT portal does not teleport.
+  - Ignore taps on UI buttons (arena tap handler should only fire inside arena pressable).
+  - Ball frozen until Start (no falling while placing).
+- Acceptance checks (below)
+
+IMPLEMENTATION DETAILS
+A) Arena sizing
+- Compute ArenaRect based on screen dimensions:
+  - arenaWidth = min(screenWidth - 32, 360)
+  - arenaHeight = round(arenaWidth * 1.6)  // 10:16 ratio
+  - center it horizontally; place it below a top header area for buttons.
+- Define ArenaRect as { left, top, right, bottom, width, height } in src/constants.ts.
+
+B) Physics world (matter-js)
+- Create an engine + world with gravity enabled only when Running.
+- Represent walls as static rectangles (thickness ~16px).
+- ENTRY portal is a sensor rectangle (isSensor: true) positioned slightly inside bottom edge:
+  - y = arenaBottom - wallThickness - 8 (inside)
+  - width ~ 20% of arenaWidth (or fixed 72px), height ~ 16px
+- EXIT portal is a sensor rectangle positioned on boundary according to snap.
+- Ball is a circle body with radius ~ 10–14px.
+- Ball should be “frozen” until Start:
+  - easiest: create ball body as static (isStatic: true) and set to dynamic on Start
+  - or set gravity scale to 0 and keep ball sleeping; pick one and document it.
+
+C) Teleport detection + cooldown
+- Use Matter.Events.on(engine, 'collisionStart', handler)
+- When collision involves (ball, entryPortalSensor) and now - lastTeleportAt > 150ms:
+  - compute entryNormal and exitNormal from their PortalSide
+  - rotate ball velocity:
+    angleRad = signedAngleRad(entryNormal, exitNormal)
+    vOut = rotateVec(vIn, angleRad)
+    preserve speed: if speed changes due to numeric issues, normalize to original speed
+  - set position: exitPos + exitNormal * (ballRadius + 5px)
+  - set velocity: vOut
+  - set lastTeleportAt = now
+
+D) Snap-to-perimeter (src/snap.ts)
+- Given a tap point within arena, compute distances to each edge:
+  dLeft = abs(x - left), dRight, dTop, dBottom
+- Choose smallest to pick side.
+- Snap point to that edge:
+  - if side=Left: x = left; y = clamp(y, top+margin, bottom-margin)
+  - if side=Right: x = right; y clamp...
+  - if side=Top: y = top; x clamp...
+  - if side=Bottom: y = bottom; x clamp...
+- margin = portalHalf + cornerMargin (cornerMargin = 16)
+- portalHalf should be derived from portal visual size (e.g., portalWidth/2) in constants.ts.
+
+E) UI
+- Two buttons at top: Start/Drop, Reset
+- Show current state text.
+- Arena area is a Pressable that captures taps; on tap:
+  - if state is PlacingPortal or Ready, compute snapped exit portal position and set exit portal body position accordingly.
+- Start:
+  - set state Running
+  - unfreeze ball (set dynamic) and enable gravity
+- Reset:
+  - set state Ready
+  - freeze ball, zero velocity, move to spawn
+  - keep exit portal where last placed (or optionally reset to right wall mid; pick one and document)
+
+RENDERING
+- Render walls, ball, portals as absolute-positioned Views.
+- Keep visuals simple:
+  - walls: gray
+  - entry portal: blue
+  - exit portal: purple
+  - ball: white
+- No art assets.
+
+ACCEPTANCE CHECKS (must pass)
+1) Tap inside arena near an edge: exit portal snaps to the nearest edge and clamps away from corners.
+2) Press Start: ball drops (gravity active) from spawn inside arena.
+3) When ball overlaps ENTRY portal: it teleports to EXIT portal and continues moving with rotated velocity (direction depends on wall).
+4) Press Reset: ball returns to spawn, physics frozen again, can repeat immediately.
+
+OUTPUT EXPECTATION
+- Commit-ready code in the Replit workspace.
+- README with run instructions (“Run with Expo”, “Open in Expo Go”).
+- SSOT doc in docs/PORTAL_DROP_RN_SPEC.md that matches the implementation.
+
+IMPORTANT: Do not add any features not listed above. If a choice is ambiguous, pick a reasonable default and record it in the SSOT Decision Log section.

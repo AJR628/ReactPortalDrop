@@ -1,0 +1,106 @@
+architect + implementer for a new Unity mobile puzzle game prototype.
+
+PROJECT: “Portal Drop” (working title)
+GOAL: Build a clean, deterministic Unity 2D prototype for a portal-based physics puzzle game (premium, one-off app). Start with a single playable level that proves the core mechanic: tap-to-place an exit portal on the arena boundary, drop a ball, ball enters a fixed entry portal, exits at the chosen portal with velocity rotated correctly, and can be restarted quickly. Keep scope small and shippable.
+
+HARD CONSTRAINTS (anti-drift):
+- Unity: use current Unity 6 LTS 2D template (or latest LTS installed). 2D physics only.
+- Platform: mobile-first portrait (iOS/Android). Input must work for mouse + touch.
+- No backend, no accounts, no ads, no subscriptions.
+- Minimal scripts (target ~6). No over-engineering.
+- Deterministic feel: no randomness, stable physics (fixed timestep), consistent teleport rule.
+- One scene for now: `Main.unity`. (We can add more later.)
+- Create a SSOT spec doc in-repo and treat it as the source of truth.
+
+DELIVERABLES (Phase A then Phase B):
+PHASE A — Plan/Spec (must write first, in repo as docs)
+1) Create `docs/PORTAL_DROP_SPEC.md` containing:
+   - Core loop and rules (entry portal fixed, user places exit portal on boundary, ball drops, teleport, win condition reserved for later)
+   - Teleport math definition (rotate velocity from entry portal inward normal to exit portal inward normal)
+   - Snap-to-boundary algorithm definition (rect arena, nearest point on perimeter, quantize optional)
+   - Game states for MVP: PlacingPortal → Ready → Running → Reset
+   - Script list + responsibilities (names below)
+   - Scene object recipe (which GameObjects exist, required components)
+   - Known non-goals for MVP (no level system yet, no scoring, no particles)
+   - Acceptance checks for Phase B (see below)
+2) Create a tiny “Decision Log” section at bottom of the doc and add decisions you make.
+
+PHASE B — Implement “First Steps” playable slice
+Implement a working prototype in `Main.unity` with these behaviors:
+
+SCENE SETUP (Main.unity)
+- Camera: orthographic, sized for portrait, arena centered.
+- Arena boundary: a rectangular box collider representing walls (not trigger).
+  - Use 4 edge colliders OR a single BoxCollider2D + interior walls as BoxCollider2D.
+  - Keep arena size simple: e.g., width 10, height 16 world units (tune as needed).
+- Ball:
+  - GameObject `Ball` with Rigidbody2D (Dynamic), CircleCollider2D, PhysicsMaterial2D (optional bounce).
+  - Spawn point near top center (above arena top edge slightly inside).
+- Entry Portal:
+  - GameObject `PortalEntry` on bottom wall near center.
+  - Collider: BoxCollider2D set to isTrigger.
+  - Stores inward normal (should point upward into arena for bottom wall).
+- Exit Portal:
+  - GameObject `PortalExit` initially placed on some boundary position (e.g., right wall middle).
+  - Collider: BoxCollider2D isTrigger.
+  - User can move it by tapping boundary BEFORE run.
+  - Stores inward normal based on which wall segment it’s on.
+- Optional simple UI:
+  - Canvas with two buttons: Start/Drop and Reset.
+  - Start is enabled after an exit portal placement (or always enabled).
+- Debug overlay optional: show current state text.
+
+SCRIPTS (create in `Assets/Scripts/` exactly these names)
+1) `GameManager.cs`
+   - Owns state machine: PlacingPortal, Ready, Running.
+   - Start button transitions Ready→Running: spawns/resets ball, starts simulation.
+   - Reset returns to PlacingPortal (or Ready) and places ball back at spawn.
+2) `PortalManager.cs`
+   - Holds references to entry and exit portals (Transforms + Portal component data).
+   - Detects ball entering the entry portal trigger and teleports to exit.
+   - Teleport rule:
+     - Preserve speed; rotate velocity by angle between entryNormal and exitNormal:
+       angle = SignedAngle(entryNormal, exitNormal)
+       vOut = Rotate(vIn, angle)
+     - Move ball to exit position + exitNormal * smallOffset (e.g., 0.3) to avoid immediate re-collision
+     - Apply cooldown to prevent instant re-teleport (e.g., 0.15s)
+3) `Portal.cs`
+   - Small component holding:
+     - `PortalSide` enum (Top/Bottom/Left/Right)
+     - inward normal (Vector2)
+     - helper to set side/normal when placed/snapped
+4) `InputPortalPlacer.cs`
+   - Reads tap/click while in PlacingPortal or Ready.
+   - Converts screen point to world point.
+   - Snaps to nearest point on the arena perimeter.
+   - Positions `PortalExit` there and sets its `Portal` side + inward normal.
+   - Optional: quantize placement along perimeter (e.g., 0.25 unit increments) for puzzle feel.
+5) `BallController.cs`
+   - Holds Rigidbody2D reference and handles teleport cooldown (bool + timer).
+   - Exposes `CanTeleport` and `SetTeleportCooldown(seconds)`.
+6) `GoalZone.cs` (stub for now)
+   - Create but leave minimal (we’ll use it later). It can be empty or log hits.
+
+TECHNICAL REQUIREMENTS
+- Input must work in editor (mouse) AND on device (touch).
+- Teleport only triggers when ball overlaps entry portal trigger AND ball cooldown allows.
+- Exit portal trigger should NOT immediately teleport the ball back (it’s just an exit for now).
+- No fancy art required; use simple sprites (white square/ball) or Unity primitives.
+
+ACCEPTANCE CHECKS (must pass)
+- In Play Mode:
+  1) Tap a boundary location → exit portal jumps/snaps to that boundary.
+  2) Press Start/Drop → ball drops from spawn.
+  3) When ball hits entry portal trigger, it teleports to exit portal and continues moving with rotated velocity (direction changes based on exit wall).
+  4) Press Reset → ball returns to spawn, simulation can be repeated quickly.
+- Code is small, readable, and matches the spec doc. No extra systems added.
+
+WORK STYLE
+- Do NOT ask me questions unless you are blocked. Make reasonable assumptions and document them in `docs/PORTAL_DROP_SPEC.md` decision log.
+- Implement in small commits (if repo uses git): one for docs/spec, one for scripts, one for scene wiring.
+- Keep names EXACT to avoid drift. Keep everything in one scene.
+
+Begin now:
+1) Write the spec doc first.
+2) Then implement scripts.
+3) Then wire the scene so it runs and meets acceptance checks.
