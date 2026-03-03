@@ -19,13 +19,15 @@ Portal Drop is a 2D physics puzzle prototype with a two-way portal pair system. 
 - Puck overlaps Portal A → teleports to Portal B, exits inward from B's wall.
 - Puck overlaps Portal B → teleports to Portal A, exits inward from A's wall.
 
-### Portal Movement Rule
-- Track `lastExitPortalId`: which portal the puck most recently exited from.
-- `movablePortalId = opposite of lastExitPortalId`.
-- Default `lastExitPortalId = 'A'`, so taps initially move Portal B.
-- After teleport A→B (exit B): lastExitPortalId = 'B', taps move Portal A.
-- After teleport B→A (exit A): lastExitPortalId = 'A', taps move Portal B.
-- UI label shows "TAP MOVES A" or "TAP MOVES B". Movable portal has white border highlight.
+### Tap Alternation Rule
+- While the puck is running, every tap alternates which portal is moved: tap #1 moves one, tap #2 moves the other, etc.
+- Track `nextMovePortalId` ('A' | 'B'): which portal the next tap will move.
+- Default `nextMovePortalId = 'B'` (pre-launch taps always move B).
+- After a teleport: `nextMovePortalId` is set to the exit portal (the one the puck just came out of).
+  - After A→B teleport (exit B): next tap moves B.
+  - After B→A teleport (exit A): next tap moves A.
+- After each successful tap placement while running: `nextMovePortalId` flips to the other portal.
+- UI label shows "TAP MOVES A" or "TAP MOVES B". The next-to-move portal has a white border highlight.
 
 ### Placement Safety
 - Cannot place portal within `MIN_PORTAL_DISTANCE` (40px) of the other portal.
@@ -93,7 +95,7 @@ Given a tap point in arena coordinates:
 - Gravity is ALWAYS off.
 - Speed is forced constant every physics tick via normalization.
 - Cooldown prevents re-teleport for 150ms after each teleport.
-- After teleport, puck keeps moving. Taps move the opposite portal automatically.
+- After teleport, puck keeps moving. Taps alternate which portal is moved, starting with the exit portal.
 
 ## Script Responsibilities
 | File | Purpose |
@@ -102,16 +104,17 @@ Given a tap point in arena coordinates:
 | `src/math.ts` | Vector rotation, signed angle, magnitude |
 | `src/snap.ts` | Snap-to-perimeter algorithm |
 | `src/physics.ts` | Matter.js engine (zero-gravity, elastic walls), ball start/reset/teleport |
-| `app/index.tsx` | Game screen, bidirectional teleport loop, tap-to-move opposite portal, UI |
+| `app/index.tsx` | Game screen, bidirectional teleport loop, alternating tap portal movement, UI |
 | `constants/colors.ts` | Portal A/B colors, theme |
 
 ## Acceptance Checks
 1. Press LAUNCH: puck moves straight down at constant speed.
 2. Puck enters Portal A → teleports to Portal B, exits inward. Turn counter increments.
-3. After exiting B, taps move Portal A (opposite). Label shows "TAP MOVES A".
-4. Puck bounces off walls. If it returns into B, it teleports B→A, exits A inward.
-5. After exiting A, taps move Portal B. Label shows "TAP MOVES B".
-6. RESET restores both portals to defaults, puck to spawn, lastExitPortalId to 'A'.
+3. After exiting B, first tap moves Portal B (the exit portal). Label shows "TAP MOVES B".
+4. Second tap moves Portal A. Label shows "TAP MOVES A". Continues alternating.
+5. Puck bounces off walls. If it returns into B, it teleports B→A, exits A inward.
+6. After exiting A, first tap moves Portal A. Alternation continues.
+7. RESET restores both portals to defaults, puck to spawn, nextMovePortalId to 'B'.
 
 ## Non-Goals (MVP)
 - No level system
@@ -123,8 +126,9 @@ Given a tap point in arena coordinates:
 ## Decision Log
 | Decision | Rationale |
 |----------|-----------|
-| Two-way portal pair instead of exit-becomes-entry | More strategic — player moves the destination portal |
-| lastExitPortalId defaults to 'A' | Taps initially move B (the portal user wants to position) |
+| Two-way portal pair with alternating tap control | Player can quickly reposition BOTH portals |
+| Tap alternation resets to exit portal after teleport | First tap after teleport moves the portal puck just exited from |
+| nextMovePortalId defaults to 'B' | Pre-launch taps move B (the portal user wants to position first) |
 | Portal A checked before B on overlap | Deterministic — if both overlap (shouldn't happen), A wins |
 | Constant-velocity puck, no gravity | Straight-line motion makes portal chaining predictable |
 | Speed normalized every tick | Prevents energy loss/gain from bounces or drift |

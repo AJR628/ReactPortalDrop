@@ -1,0 +1,60 @@
+Continue the existing Expo + RN + matter-js PortalDrop prototype in this repo.
+
+CURRENT STATE
+- Puck moves in straight trajectory and bounces off walls.
+- Teleport works through entry -> exit.
+- Problem: taps only move ONE portal (exit). Player cannot quickly reposition BOTH portals.
+
+NEW GAMEPLAY RULE (authoritative)
+- While the puck is running, EVERY TAP alternates which portal is moved:
+  Tap #1 moves Entry, Tap #2 moves Exit, Tap #3 moves Entry, etc.
+- After a teleport occurs, the FIRST tap should move the portal the puck JUST CAME OUT OF.
+  In current code, you set entryPortal = previous exitPortal on teleport, so:
+  After teleport: set nextPortalToMove = 'entry' (so first tap moves the just-exited portal).
+- Both portals remain visible and active at all times (as currently rendered).
+
+IMPLEMENTATION REQUIREMENTS (minimal changes, no new features)
+1) Add a ref to track which portal the next tap will move:
+   - nextPortalToMoveRef: 'entry' | 'exit'
+   - also keep a small UI state string: “Tap moves: ENTRY” / “Tap moves: EXIT”
+
+2) Update teleport handler in app/index.tsx:
+   - keep the existing teleport math
+   - after teleport sets entryPortalRef = previous exitPortal,
+     set nextPortalToMoveRef.current = 'entry'
+     and update UI label accordingly
+   - do NOT stop simulation
+
+3) Update handleArenaTap in app/index.tsx:
+   - allow taps in Running (and also PlacingPortal/Ready if you keep that flow)
+   - compute snapped portal position as before
+   - choose target portal:
+       if simActiveRef.current (or state === 'Running'):
+           target = nextPortalToMoveRef.current
+       else:
+           target = 'exit' (pre-start placement only)
+   - If target === 'entry':
+       setEntryPortal(newPortal); entryPortalRef.current = newPortal
+     else:
+       setExitPortal(newPortal); exitPortalRef.current = newPortal
+   - After successful placement during Running:
+       nextPortalToMoveRef.current = (target === 'entry' ? 'exit' : 'entry')
+       update UI label
+   - Keep MIN_PORTAL_DISTANCE checks against the other portal so they can’t overlap.
+
+4) Visual clarity (small “sauce”, minimal):
+   - Show text at top: “Tap moves: ENTRY” or “Tap moves: EXIT”
+   - Highlight the portal that will move next (e.g., slightly brighter border/glow).
+     Do this by passing an “isActive” flag into renderPortal or by adjusting styles conditionally.
+
+FILES TO TOUCH (keep minimal)
+- app/index.tsx (tap alternation + UI + teleport sets next target)
+- docs/PORTAL_DROP_RN_SPEC.md (add a short section describing “tap alternates portal moved” and “after teleport next tap moves entry”)
+No new mechanics beyond this.
+
+ACCEPTANCE CHECKS
+- Start game. Puck teleports out of exit portal.
+- Immediately tap once: the portal it exited from moves (ENTRY, since entryPortal was set to the last exit).
+- Tap again quickly: the other portal moves (EXIT).
+- Continue tapping: it alternates every tap.
+- Puck continues moving and portals continue working.

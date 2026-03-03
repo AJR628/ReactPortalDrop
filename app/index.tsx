@@ -76,7 +76,7 @@ export default function PortalDropGame() {
   const [ballPos, setBallPos] = useState<Vec2>({ x: SPAWN_X, y: SPAWN_Y });
   const [teleportFlash, setTeleportFlash] = useState(false);
   const [turnCount, setTurnCount] = useState(0);
-  const [lastExitPortalId, setLastExitPortalId] = useState<PortalId>('A');
+  const [nextMovePortalId, setNextMovePortalId] = useState<PortalId>('B');
 
   const engineRef = useRef<Matter.Engine | null>(null);
   const ballRef = useRef<Matter.Body | null>(null);
@@ -86,12 +86,10 @@ export default function PortalDropGame() {
   const gameStateRef = useRef<GameState>('PlacingPortal');
   const portalARef = useRef<PortalState>(DEFAULT_PORTAL_A);
   const portalBRef = useRef<PortalState>(DEFAULT_PORTAL_B);
-  const lastExitPortalIdRef = useRef<PortalId>('A');
+  const nextMovePortalIdRef = useRef<PortalId>('B');
   const ballPosRef = useRef<Vec2>({ x: SPAWN_X, y: SPAWN_Y });
   const arenaLayoutRef = useRef({ x: 0, y: 0 });
   const arenaViewRef = useRef<View>(null);
-
-  const movablePortalId: PortalId = lastExitPortalId === 'A' ? 'B' : 'A';
 
   useEffect(() => {
     gameStateRef.current = gameState;
@@ -182,8 +180,8 @@ export default function PortalDropGame() {
             setTeleportFlash(true);
             setTimeout(() => setTeleportFlash(false), 150);
 
-            lastExitPortalIdRef.current = exitId;
-            setLastExitPortalId(exitId);
+            nextMovePortalIdRef.current = exitId;
+            setNextMovePortalId(exitId);
             setTurnCount((c) => c + 1);
 
             if (Platform.OS !== 'web') {
@@ -238,8 +236,11 @@ export default function PortalDropGame() {
         normal: result.normal,
       };
 
-      const movable = lastExitPortalIdRef.current === 'A' ? 'B' : 'A';
-      const otherPortal = movable === 'A' ? portalBRef.current : portalARef.current;
+      const target: PortalId = simActiveRef.current
+        ? nextMovePortalIdRef.current
+        : 'B';
+
+      const otherPortal = target === 'A' ? portalBRef.current : portalARef.current;
 
       if (portalDistance(newPortal, otherPortal) < MIN_PORTAL_DISTANCE) {
         return;
@@ -252,12 +253,18 @@ export default function PortalDropGame() {
         }
       }
 
-      if (movable === 'A') {
+      if (target === 'A') {
         setPortalA(newPortal);
         portalARef.current = newPortal;
       } else {
         setPortalB(newPortal);
         portalBRef.current = newPortal;
+      }
+
+      if (simActiveRef.current) {
+        const next: PortalId = target === 'A' ? 'B' : 'A';
+        nextMovePortalIdRef.current = next;
+        setNextMovePortalId(next);
       }
 
       if (currentState === 'PlacingPortal') {
@@ -301,8 +308,8 @@ export default function PortalDropGame() {
     portalARef.current = DEFAULT_PORTAL_A;
     setPortalB(DEFAULT_PORTAL_B);
     portalBRef.current = DEFAULT_PORTAL_B;
-    setLastExitPortalId('A');
-    lastExitPortalIdRef.current = 'A';
+    setNextMovePortalId('B');
+    nextMovePortalIdRef.current = 'B';
     setGameState('PlacingPortal');
     gameStateRef.current = 'PlacingPortal';
     lastTeleportRef.current = 0;
@@ -383,7 +390,7 @@ export default function PortalDropGame() {
 
   const canStart = gameState === 'Ready';
 
-  const movableLabel = `TAP MOVES ${movablePortalId}`;
+  const movableLabel = `TAP MOVES ${nextMovePortalId}`;
 
   return (
     <View style={[styles.container, { paddingTop: topInset }]}>
@@ -412,7 +419,7 @@ export default function PortalDropGame() {
         </View>
         <Text style={[
           styles.movableLabel,
-          { color: movablePortalId === 'A' ? Colors.portalA : Colors.portalB },
+          { color: nextMovePortalId === 'A' ? Colors.portalA : Colors.portalB },
         ]}>
           {movableLabel}
         </Text>
@@ -437,14 +444,14 @@ export default function PortalDropGame() {
             Colors.portalA,
             Colors.portalAGlow,
             'A',
-            movablePortalId === 'A'
+            nextMovePortalId === 'A'
           )}
           {renderPortal(
             portalB,
             Colors.portalB,
             Colors.portalBGlow,
             'B',
-            movablePortalId === 'B'
+            nextMovePortalId === 'B'
           )}
 
           <View style={styles.spawnIndicator}>

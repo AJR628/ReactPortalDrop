@@ -29,7 +29,7 @@ constants/
 - **States**: PlacingPortal → Ready → Running (stays running)
 - **Portal system**: Two-way pair. Portal A (blue, bottom) and Portal B (purple, right). Both always active.
 - **Bidirectional teleport**: Enter A → exit B. Enter B → exit A. Velocity rotated by signed angle, normalized to BALL_SPEED.
-- **Tap moves opposite**: After exiting B, taps move A. After exiting A, taps move B. Default: taps move B.
+- **Alternating taps**: Each tap alternates which portal moves (A→B→A→...). After teleport, first tap targets the exit portal. Default: taps move B.
 - **Motion model**: Constant-velocity puck (BALL_SPEED=4). No gravity. Velocity normalized every tick.
 - **Wall bounce**: Elastic (restitution 1.0, friction 0). Straight-line bounces.
 - **Safety**: Cannot place portal within 40px of other portal or puck.
