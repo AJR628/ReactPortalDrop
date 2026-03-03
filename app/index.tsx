@@ -21,13 +21,15 @@ import {
   PORTAL_THICKNESS,
   TELEPORT_COOLDOWN,
   TELEPORT_OFFSET,
-  INITIAL_ENTRY_PORTAL,
-  DEFAULT_EXIT_PORTAL,
+  DEFAULT_PORTAL_A,
+  DEFAULT_PORTAL_B,
   MIN_PORTAL_DISTANCE,
+  MIN_PORTAL_PUCK_DIST,
   SPAWN_X,
   SPAWN_Y,
   Vec2,
   PortalState,
+  PortalId,
   GameState,
 } from '@/src/constants';
 import { signedAngle, rotateVec, magnitude, scale } from '@/src/math';
@@ -51,10 +53,14 @@ function ballOverlapsPortal(
   return dx * dx + dy * dy <= BALL_RADIUS * BALL_RADIUS;
 }
 
-function portalDistance(a: PortalState, b: PortalState): number {
-  const dx = a.x - b.x;
-  const dy = a.y - b.y;
+function dist(ax: number, ay: number, bx: number, by: number): number {
+  const dx = ax - bx;
+  const dy = ay - by;
   return Math.sqrt(dx * dx + dy * dy);
+}
+
+function portalDistance(a: PortalState, b: PortalState): number {
+  return dist(a.x, a.y, b.x, b.y);
 }
 
 export default function PortalDropGame() {
@@ -65,11 +71,12 @@ export default function PortalDropGame() {
   const bottomInset = Platform.OS === 'web' ? webBottomInset : insets.bottom;
 
   const [gameState, setGameState] = useState<GameState>('PlacingPortal');
-  const [entryPortal, setEntryPortal] = useState<PortalState>(INITIAL_ENTRY_PORTAL);
-  const [exitPortal, setExitPortal] = useState<PortalState>(DEFAULT_EXIT_PORTAL);
+  const [portalA, setPortalA] = useState<PortalState>(DEFAULT_PORTAL_A);
+  const [portalB, setPortalB] = useState<PortalState>(DEFAULT_PORTAL_B);
   const [ballPos, setBallPos] = useState<Vec2>({ x: SPAWN_X, y: SPAWN_Y });
   const [teleportFlash, setTeleportFlash] = useState(false);
   const [turnCount, setTurnCount] = useState(0);
+  const [lastExitPortalId, setLastExitPortalId] = useState<PortalId>('A');
 
   const engineRef = useRef<Matter.Engine | null>(null);
   const ballRef = useRef<Matter.Body | null>(null);
@@ -77,22 +84,26 @@ export default function PortalDropGame() {
   const animFrameRef = useRef<number | null>(null);
   const simActiveRef = useRef(false);
   const gameStateRef = useRef<GameState>('PlacingPortal');
-  const entryPortalRef = useRef<PortalState>(INITIAL_ENTRY_PORTAL);
-  const exitPortalRef = useRef<PortalState>(DEFAULT_EXIT_PORTAL);
+  const portalARef = useRef<PortalState>(DEFAULT_PORTAL_A);
+  const portalBRef = useRef<PortalState>(DEFAULT_PORTAL_B);
+  const lastExitPortalIdRef = useRef<PortalId>('A');
+  const ballPosRef = useRef<Vec2>({ x: SPAWN_X, y: SPAWN_Y });
   const arenaLayoutRef = useRef({ x: 0, y: 0 });
   const arenaViewRef = useRef<View>(null);
+
+  const movablePortalId: PortalId = lastExitPortalId === 'A' ? 'B' : 'A';
 
   useEffect(() => {
     gameStateRef.current = gameState;
   }, [gameState]);
 
   useEffect(() => {
-    entryPortalRef.current = entryPortal;
-  }, [entryPortal]);
+    portalARef.current = portalA;
+  }, [portalA]);
 
   useEffect(() => {
-    exitPortalRef.current = exitPortal;
-  }, [exitPortal]);
+    portalBRef.current = portalB;
+  }, [portalB]);
 
   useEffect(() => {
     const { engine, ball } = createPhysicsWorld();
@@ -125,47 +136,59 @@ export default function PortalDropGame() {
         const bx = ball.position.x;
         const by = ball.position.y;
         setBallPos({ x: bx, y: by });
+        ballPosRef.current = { x: bx, y: by };
 
-        const currentEntry = entryPortalRef.current;
-        if (
-          ballOverlapsPortal(bx, by, currentEntry) &&
-          now - lastTeleportRef.current > TELEPORT_COOLDOWN
-        ) {
-          const ep = exitPortalRef.current;
-          const angle = signedAngle(currentEntry.normal, ep.normal);
-          const vIn = ball.velocity;
+        const pA = portalARef.current;
+        const pB = portalBRef.current;
+        const cooldownOk = now - lastTeleportRef.current > TELEPORT_COOLDOWN;
 
-          let vOut = rotateVec(vIn, angle);
-          const outSpeed = magnitude(vOut);
-          if (outSpeed > 0.001) {
-            vOut = scale(vOut, BALL_SPEED / outSpeed);
-          } else {
-            vOut = { x: ep.normal.x * BALL_SPEED, y: ep.normal.y * BALL_SPEED };
+        if (cooldownOk) {
+          let entryPortal: PortalState | null = null;
+          let exitPortal: PortalState | null = null;
+          let exitId: PortalId | null = null;
+
+          if (ballOverlapsPortal(bx, by, pA)) {
+            entryPortal = pA;
+            exitPortal = pB;
+            exitId = 'B';
+          } else if (ballOverlapsPortal(bx, by, pB)) {
+            entryPortal = pB;
+            exitPortal = pA;
+            exitId = 'A';
           }
 
-          const exitPos = {
-            x: ep.x + ep.normal.x * TELEPORT_OFFSET,
-            y: ep.y + ep.normal.y * TELEPORT_OFFSET,
-          };
+          if (entryPortal && exitPortal && exitId) {
+            const angle = signedAngle(entryPortal.normal, exitPortal.normal);
+            const vIn = ball.velocity;
 
-          teleportBall(ball, exitPos, vOut);
-          lastTeleportRef.current = now;
+            let vOut = rotateVec(vIn, angle);
+            const outSpeed = magnitude(vOut);
+            if (outSpeed > 0.001) {
+              vOut = scale(vOut, BALL_SPEED / outSpeed);
+            } else {
+              vOut = { x: exitPortal.normal.x * BALL_SPEED, y: exitPortal.normal.y * BALL_SPEED };
+            }
 
-          Matter.Sleeping.set(ball, false);
+            const exitPos = {
+              x: exitPortal.x + exitPortal.normal.x * TELEPORT_OFFSET,
+              y: exitPortal.y + exitPortal.normal.y * TELEPORT_OFFSET,
+            };
 
-          setTeleportFlash(true);
-          setTimeout(() => setTeleportFlash(false), 150);
+            teleportBall(ball, exitPos, vOut);
+            lastTeleportRef.current = now;
 
-          const newEntry: PortalState = { ...ep };
-          setEntryPortal(newEntry);
-          entryPortalRef.current = newEntry;
+            Matter.Sleeping.set(ball, false);
 
-          setTurnCount((c) => c + 1);
-          setGameState('PlacingNextExit');
-          gameStateRef.current = 'PlacingNextExit';
+            setTeleportFlash(true);
+            setTimeout(() => setTeleportFlash(false), 150);
 
-          if (Platform.OS !== 'web') {
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+            lastExitPortalIdRef.current = exitId;
+            setLastExitPortalId(exitId);
+            setTurnCount((c) => c + 1);
+
+            if (Platform.OS !== 'web') {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+            }
           }
         }
       }
@@ -184,7 +207,7 @@ export default function PortalDropGame() {
   const handleArenaTap = useCallback(
     (e: GestureResponderEvent) => {
       const currentState = gameStateRef.current;
-      if (currentState !== 'PlacingPortal' && currentState !== 'Ready' && currentState !== 'PlacingNextExit' && currentState !== 'Running') return;
+      if (currentState !== 'PlacingPortal' && currentState !== 'Ready' && currentState !== 'Running') return;
 
       let ax: number;
       let ay: number;
@@ -215,19 +238,31 @@ export default function PortalDropGame() {
         normal: result.normal,
       };
 
-      if (portalDistance(newPortal, entryPortalRef.current) < MIN_PORTAL_DISTANCE) {
+      const movable = lastExitPortalIdRef.current === 'A' ? 'B' : 'A';
+      const otherPortal = movable === 'A' ? portalBRef.current : portalARef.current;
+
+      if (portalDistance(newPortal, otherPortal) < MIN_PORTAL_DISTANCE) {
         return;
       }
 
-      setExitPortal(newPortal);
-      exitPortalRef.current = newPortal;
+      if (simActiveRef.current) {
+        const bp = ballPosRef.current;
+        if (dist(newPortal.x, newPortal.y, bp.x, bp.y) < MIN_PORTAL_PUCK_DIST) {
+          return;
+        }
+      }
+
+      if (movable === 'A') {
+        setPortalA(newPortal);
+        portalARef.current = newPortal;
+      } else {
+        setPortalB(newPortal);
+        portalBRef.current = newPortal;
+      }
 
       if (currentState === 'PlacingPortal') {
         setGameState('Ready');
         gameStateRef.current = 'Ready';
-      } else if (currentState === 'PlacingNextExit') {
-        setGameState('Running');
-        gameStateRef.current = 'Running';
       }
 
       if (Platform.OS !== 'web') {
@@ -261,10 +296,13 @@ export default function PortalDropGame() {
     simActiveRef.current = false;
     resetBall(engine, ball);
     setBallPos({ x: SPAWN_X, y: SPAWN_Y });
-    setEntryPortal(INITIAL_ENTRY_PORTAL);
-    entryPortalRef.current = INITIAL_ENTRY_PORTAL;
-    setExitPortal(DEFAULT_EXIT_PORTAL);
-    exitPortalRef.current = DEFAULT_EXIT_PORTAL;
+    ballPosRef.current = { x: SPAWN_X, y: SPAWN_Y };
+    setPortalA(DEFAULT_PORTAL_A);
+    portalARef.current = DEFAULT_PORTAL_A;
+    setPortalB(DEFAULT_PORTAL_B);
+    portalBRef.current = DEFAULT_PORTAL_B;
+    setLastExitPortalId('A');
+    lastExitPortalIdRef.current = 'A';
     setGameState('PlacingPortal');
     gameStateRef.current = 'PlacingPortal';
     lastTeleportRef.current = 0;
@@ -279,7 +317,8 @@ export default function PortalDropGame() {
     portal: PortalState,
     color: string,
     glowColor: string,
-    label: string
+    label: string,
+    isMovable: boolean
   ) => {
     const isHorizontal = portal.side === 'Top' || portal.side === 'Bottom';
     const w = isHorizontal ? PORTAL_LENGTH : PORTAL_THICKNESS;
@@ -317,6 +356,8 @@ export default function PortalDropGame() {
             shadowOpacity: 0.8,
             shadowRadius: 12,
             shadowOffset: { width: 0, height: 0 },
+            borderWidth: isMovable ? 1 : 0,
+            borderColor: isMovable ? Colors.portalMovableBorder : 'transparent',
           },
         ]}
       >
@@ -335,14 +376,14 @@ export default function PortalDropGame() {
 
   const stateLabel =
     gameState === 'PlacingPortal'
-      ? 'PLACE EXIT PORTAL'
-      : gameState === 'PlacingNextExit'
-        ? 'PLACE NEXT EXIT'
-        : gameState === 'Ready'
-          ? 'READY TO LAUNCH'
-          : 'IN MOTION';
+      ? 'PLACE PORTAL'
+      : gameState === 'Ready'
+        ? 'READY TO LAUNCH'
+        : 'IN MOTION';
 
   const canStart = gameState === 'Ready';
+
+  const movableLabel = `TAP MOVES ${movablePortalId}`;
 
   return (
     <View style={[styles.container, { paddingTop: topInset }]}>
@@ -358,9 +399,7 @@ export default function PortalDropGame() {
                     ? '#44FF88'
                     : gameState === 'Ready'
                       ? Colors.accent
-                      : gameState === 'PlacingNextExit'
-                        ? Colors.exitPortal
-                        : Colors.textDim,
+                      : Colors.textDim,
               },
             ]}
           />
@@ -371,6 +410,12 @@ export default function PortalDropGame() {
             </Text>
           )}
         </View>
+        <Text style={[
+          styles.movableLabel,
+          { color: movablePortalId === 'A' ? Colors.portalA : Colors.portalB },
+        ]}>
+          {movableLabel}
+        </Text>
       </View>
 
       <View style={styles.arenaWrapper}>
@@ -388,16 +433,18 @@ export default function PortalDropGame() {
           ]}
         >
           {renderPortal(
-            entryPortal,
-            Colors.entryPortal,
-            Colors.entryPortalGlow,
-            'entry'
+            portalA,
+            Colors.portalA,
+            Colors.portalAGlow,
+            'A',
+            movablePortalId === 'A'
           )}
           {renderPortal(
-            exitPortal,
-            Colors.exitPortal,
-            Colors.exitPortalGlow,
-            'exit'
+            portalB,
+            Colors.portalB,
+            Colors.portalBGlow,
+            'B',
+            movablePortalId === 'B'
           )}
 
           <View style={styles.spawnIndicator}>
@@ -461,15 +508,15 @@ export default function PortalDropGame() {
       <View style={styles.legend}>
         <View style={styles.legendItem}>
           <View
-            style={[styles.legendDot, { backgroundColor: Colors.entryPortal }]}
+            style={[styles.legendDot, { backgroundColor: Colors.portalA }]}
           />
-          <Text style={styles.legendText}>Entry</Text>
+          <Text style={styles.legendText}>Portal A</Text>
         </View>
         <View style={styles.legendItem}>
           <View
-            style={[styles.legendDot, { backgroundColor: Colors.exitPortal }]}
+            style={[styles.legendDot, { backgroundColor: Colors.portalB }]}
           />
-          <Text style={styles.legendText}>Exit</Text>
+          <Text style={styles.legendText}>Portal B</Text>
         </View>
       </View>
     </View>
@@ -485,7 +532,7 @@ const styles = StyleSheet.create({
   header: {
     alignItems: 'center',
     paddingTop: 16,
-    paddingBottom: 12,
+    paddingBottom: 8,
   },
   title: {
     fontFamily: 'Inter_700Bold',
@@ -513,8 +560,14 @@ const styles = StyleSheet.create({
   turnText: {
     fontFamily: 'Inter_500Medium',
     fontSize: 11,
-    color: Colors.exitPortal,
+    color: Colors.portalB,
     letterSpacing: 1,
+  },
+  movableLabel: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 10,
+    letterSpacing: 2,
+    marginTop: 4,
   },
   arenaWrapper: {
     flex: 1,
@@ -531,7 +584,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   arenaFlash: {
-    borderColor: Colors.exitPortal,
+    borderColor: Colors.portalB,
   },
   portal: {
     position: 'absolute',

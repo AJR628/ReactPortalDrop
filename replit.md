@@ -1,7 +1,7 @@
 # Portal Drop — React Native Physics Puzzle Game
 
 ## Overview
-Portal Drop is a 2D physics puzzle prototype built with Expo + React Native + Matter.js. Players place portals on arena boundaries, launch a constant-velocity puck, and watch it teleport between portals with velocity rotation based on wall normals. The puck bounces off walls elastically (no gravity) and chains through portals perpetually.
+Portal Drop is a 2D physics puzzle prototype built with Expo + React Native + Matter.js. Two portals (A and B) sit on the arena boundary. A constant-velocity puck bounces off walls and teleports bidirectionally between portals. After each teleport, taps move the opposite portal. No gravity.
 
 ## Architecture
 - **Frontend**: Expo React Native (single screen, no tabs)
@@ -15,23 +15,24 @@ app/
   _layout.tsx         # Root layout with fonts, providers, StatusBar
   index.tsx           # Main game screen (game loop, rendering, input)
 src/
-  constants.ts        # Arena dimensions, physics constants, types
+  constants.ts        # Arena dimensions, physics constants, PortalId type
   math.ts             # Vector math (signedAngle, rotateVec, magnitude, scale)
   snap.ts             # Snap-to-perimeter algorithm
   physics.ts          # Matter.js world setup, ball control
 docs/
   PORTAL_DROP_RN_SPEC.md  # SSOT specification document
 constants/
-  colors.ts           # Dark sci-fi color theme
+  colors.ts           # Dark sci-fi color theme (portalA blue, portalB purple)
 ```
 
 ## Game Mechanics
-- **States**: PlacingPortal → Ready → Running → PlacingNextExit → Running → ...
+- **States**: PlacingPortal → Ready → Running (stays running)
+- **Portal system**: Two-way pair. Portal A (blue, bottom) and Portal B (purple, right). Both always active.
+- **Bidirectional teleport**: Enter A → exit B. Enter B → exit A. Velocity rotated by signed angle, normalized to BALL_SPEED.
+- **Tap moves opposite**: After exiting B, taps move A. After exiting A, taps move B. Default: taps move B.
 - **Motion model**: Constant-velocity puck (BALL_SPEED=4). No gravity. Velocity normalized every tick.
-- **Wall bounce**: Elastic (restitution 1.0, friction 0). Puck moves in straight lines, bounces off walls.
-- **Perpetual motion**: After teleport, puck keeps moving (sim stays active via simActiveRef). User places next exit while puck moves — no second LAUNCH needed.
-- **Teleport**: Velocity rotated by signed angle between entry/exit portal normals, normalized to BALL_SPEED.
-- **Portal placement**: Tap near arena edge, snaps to nearest wall, clamped from corners. Allowed in all states.
+- **Wall bounce**: Elastic (restitution 1.0, friction 0). Straight-line bounces.
+- **Safety**: Cannot place portal within 40px of other portal or puck.
 
 ## Dependencies
 - matter-js (2D physics)

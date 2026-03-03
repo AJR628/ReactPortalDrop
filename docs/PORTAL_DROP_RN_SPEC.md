@@ -1,14 +1,35 @@
 # Portal Drop — React Native Spec (SSOT)
 
 ## Overview
-Portal Drop is a 2D physics puzzle prototype with a perpetual loop mechanic. The player places an exit portal on the arena boundary, launches a constant-velocity puck, and the puck teleports from the entry portal to the exit portal with velocity rotated according to portal normals. After each teleport, the exit portal becomes the new entry portal. The puck bounces off walls elastically and moves in straight lines — no gravity, no arcing.
+Portal Drop is a 2D physics puzzle prototype with a two-way portal pair system. Two portals (A and B) exist on the arena boundary at all times, both always active. A constant-velocity puck bounces off walls and teleports bidirectionally: entering Portal A exits at Portal B, and vice versa. After each teleport, taps move the opposite portal (the destination). No gravity.
 
 ## Game States
-- **PlacingPortal**: Initial state. User taps arena boundary to place exit portal. Puck is frozen at spawn.
-- **Ready**: Exit portal has been placed. User can reposition it or press Launch.
-- **Running**: Puck is moving at constant velocity. Physics active. Teleportation enabled. User can reposition exit portal.
-- **PlacingNextExit**: After a successful teleport. The previous exit is now the entry. User places the next exit portal. Puck keeps moving.
+- **PlacingPortal**: Initial state. User taps arena boundary to reposition the movable portal. Puck is frozen at spawn.
+- **Ready**: User has repositioned a portal. Can press LAUNCH.
+- **Running**: Puck is moving at constant velocity. Bidirectional teleportation active. User can reposition the movable portal while puck moves.
 - Reset returns to **PlacingPortal** (full reset to initial state).
+
+## Portal System
+### Two-Way Portal Pair
+- Portal A (blue, #00AAFF) — default position: bottom wall center.
+- Portal B (purple, #AA44FF) — default position: right wall center.
+- Both portals are always visible and always active.
+
+### Bidirectional Teleport
+- Puck overlaps Portal A → teleports to Portal B, exits inward from B's wall.
+- Puck overlaps Portal B → teleports to Portal A, exits inward from A's wall.
+
+### Portal Movement Rule
+- Track `lastExitPortalId`: which portal the puck most recently exited from.
+- `movablePortalId = opposite of lastExitPortalId`.
+- Default `lastExitPortalId = 'A'`, so taps initially move Portal B.
+- After teleport A→B (exit B): lastExitPortalId = 'B', taps move Portal A.
+- After teleport B→A (exit A): lastExitPortalId = 'A', taps move Portal B.
+- UI label shows "TAP MOVES A" or "TAP MOVES B". Movable portal has white border highlight.
+
+### Placement Safety
+- Cannot place portal within `MIN_PORTAL_DISTANCE` (40px) of the other portal.
+- Cannot place portal within `MIN_PORTAL_PUCK_DIST` (40px) of the puck (while moving).
 
 ## Coordinate System
 React Native and Matter.js both use **y-down** coordinates.
@@ -27,34 +48,28 @@ React Native and Matter.js both use **y-down** coordinates.
 Computed at runtime:
 - `arenaWidth = min(screenWidth - 32, 360)`
 - `arenaHeight = round(arenaWidth * 1.6)` (10:16 ratio)
-- Stored as `{ left: 0, top: 0, right: arenaWidth, bottom: arenaHeight, width, height }`
 
 ## Puck Physics (Authoritative)
 - Motion model: constant-velocity straight trajectory (no gravity).
-- `engine.gravity.y = 0` always. Gravity is never enabled.
+- `engine.gravity.y = 0` always.
 - `BALL_SPEED = 4` px per physics tick. Every tick, velocity is normalized: `v = normalize(v) * BALL_SPEED`.
-- If speed drops near zero (e.g. degenerate collision), re-seed direction to `(0, BALL_SPEED)` (straight down).
-- Ball body: `restitution: 1.0`, `friction: 0`, `frictionAir: 0`, `frictionStatic: 0`.
+- If speed drops near zero, re-seed direction to `(0, BALL_SPEED)` (straight down).
+- Ball body: `restitution: 1.0`, `friction: 0`, `frictionAir: 0`.
 - Wall bodies: `restitution: 1.0`, `friction: 0`.
-- On LAUNCH: position to spawn, set velocity `(0, BALL_SPEED)` (straight down).
+- On LAUNCH: position to spawn, set velocity `(0, BALL_SPEED)`.
 - On RESET: zero velocity, move to spawn.
-
-## Wall Bounce
-- Walls bounce the puck elastically (restitution 1.0, zero friction).
-- After bounce, velocity is normalized back to BALL_SPEED on the next tick.
-- Puck can bounce back through portals naturally.
 
 ## Teleport Rule (Authoritative)
 ```
 angle = signedAngle(entryNormal, exitNormal)
-vOut = rotate(vIn, angle)
-vOut = normalize(vOut) * BALL_SPEED
+vOut = rotate(vIn, angle) then normalize to BALL_SPEED
+if vOut speed ~0: fallback to exitNormal * BALL_SPEED
 teleportPosition = exitPortalCenter + exitNormal * TELEPORT_OFFSET
 TELEPORT_OFFSET = BALL_RADIUS + PORTAL_THICKNESS/2 + 2
 cooldown = 150ms
 ```
 
-If vOut speed is near zero after rotation, fall back to `exitNormal * BALL_SPEED`.
+Both portals checked each tick. First overlap wins (A checked before B).
 
 ### signedAngle
 `atan2(a.x * b.y - a.y * b.x, a.x * b.x + a.y * b.y)`
@@ -65,51 +80,38 @@ x' = x * cos(angle) - y * sin(angle)
 y' = x * sin(angle) + y * cos(angle)
 ```
 
-## Perpetual Loop Rule
-After a successful teleport:
-1. The exit portal becomes the new entry portal.
-2. Puck keeps moving at constant velocity (sim stays active via simActiveRef).
-3. Game state transitions to `PlacingNextExit`.
-4. User places a new exit portal (tapping transitions directly back to Running — no second LAUNCH needed).
-5. Puck continues bouncing until it hits the new entry portal.
-
-### Placement constraint
-Exit portal must be at least `MIN_PORTAL_DISTANCE` (40px) from the current entry portal. Placements too close are ignored.
-Placement is allowed in all states (PlacingPortal, Ready, PlacingNextExit, Running).
-
 ## Snap-to-Boundary Algorithm
-Given a tap point in arena coordinates (using `locationX`/`locationY`):
+Given a tap point in arena coordinates:
 1. Compute distance to each edge (top, bottom, left, right).
 2. Choose nearest edge → determines `PortalSide`.
 3. Snap coordinate to that edge.
-4. Clamp along-edge coordinate by `margin = portalLength/2 + cornerMargin`.
-   - `cornerMargin = 16px`
+4. Clamp along-edge coordinate by `margin = portalLength/2 + cornerMargin` (16px).
 5. Quantization: OFF by default.
 
 ## Critical Rules
-- Teleport triggers ONLY on entry portal overlap. Exit portal does NOT teleport.
-- Gravity is ALWAYS off. Motion is constant-velocity only.
-- Arena tap handler uses `locationX`/`locationY` for coordinates relative to the arena.
-- Cooldown prevents re-teleport for 150ms after each teleport.
-- After teleport, puck keeps moving. No freeze, no re-drop from spawn.
+- Both portals are bidirectional sensors — overlapping either triggers teleport to the other.
+- Gravity is ALWAYS off.
 - Speed is forced constant every physics tick via normalization.
+- Cooldown prevents re-teleport for 150ms after each teleport.
+- After teleport, puck keeps moving. Taps move the opposite portal automatically.
 
 ## Script Responsibilities
 | File | Purpose |
 |------|---------|
-| `src/constants.ts` | Arena dimensions, physics constants (incl. BALL_SPEED), portal defaults, game states |
+| `src/constants.ts` | Arena dims, BALL_SPEED, portal defaults (A/B), PortalId type, game states |
 | `src/math.ts` | Vector rotation, signed angle, magnitude |
 | `src/snap.ts` | Snap-to-perimeter algorithm |
-| `src/physics.ts` | Matter.js engine creation (zero-gravity, elastic walls), ball start/reset/teleport |
-| `app/index.tsx` | Main game screen, rendering, game loop with speed normalization, input, perpetual loop |
+| `src/physics.ts` | Matter.js engine (zero-gravity, elastic walls), ball start/reset/teleport |
+| `app/index.tsx` | Game screen, bidirectional teleport loop, tap-to-move opposite portal, UI |
+| `constants/colors.ts` | Portal A/B colors, theme |
 
 ## Acceptance Checks
-1. Press LAUNCH: puck moves straight down at constant speed (no curve, no arc).
-2. Puck hits a wall: bounces elastically, continues at same constant speed.
-3. Place EXIT on left wall: puck enters ENTRY then exits left portal moving rightward (straight).
-4. While puck moves, place a new EXIT on top wall. Next time puck hits ENTRY, it teleports correctly.
-5. If puck misses ENTRY and hits a wall, it bounces. If it bounces back through the portal it came out of, it teleports again per the current entry/exit chain.
-6. RESET restores initial spawn + ENTRY/EXIT defaults and puck is stopped until LAUNCH.
+1. Press LAUNCH: puck moves straight down at constant speed.
+2. Puck enters Portal A → teleports to Portal B, exits inward. Turn counter increments.
+3. After exiting B, taps move Portal A (opposite). Label shows "TAP MOVES A".
+4. Puck bounces off walls. If it returns into B, it teleports B→A, exits A inward.
+5. After exiting A, taps move Portal B. Label shows "TAP MOVES B".
+6. RESET restores both portals to defaults, puck to spawn, lastExitPortalId to 'A'.
 
 ## Non-Goals (MVP)
 - No level system
@@ -121,16 +123,12 @@ Given a tap point in arena coordinates (using `locationX`/`locationY`):
 ## Decision Log
 | Decision | Rationale |
 |----------|-----------|
-| Constant-velocity puck instead of gravity drop | Straight-line motion makes portal chaining predictable and strategic |
-| Speed normalized every tick | Prevents energy loss/gain from wall bounces or floating point drift |
-| Restitution 1.0, friction 0 everywhere | Perfectly elastic bounces preserve puck behavior |
-| BALL_SPEED = 4 | Balanced speed: visible motion without being too fast to track at 60fps |
-| Use Matter.js directly instead of react-native-game-engine | Simpler, fewer dependencies, requestAnimationFrame loop is sufficient |
-| Ball overlap check uses AABB expansion instead of Matter.js sensors | More reliable, avoids sensor quirks |
-| After teleport, puck keeps moving while user places next exit | Continuous motion via simActiveRef decoupled from gameState |
-| Portals rendered as colored bars flush with arena wall | Simple, clear visual indicator |
-| Entry portal is dynamic state (not constant) for perpetual loop | Exit becomes entry after each teleport |
-| MIN_PORTAL_DISTANCE = 40px prevents exit overlapping entry | Avoids degenerate teleport loops |
-| Tap coordinates use locationX/locationY | Reliable relative coordinates without measureInWindow |
-| Fixed timestep 16.67ms (60fps) for Matter.js | Deterministic feel |
-| Re-seed velocity to (0, BALL_SPEED) if speed ~0 | Prevents puck from getting stuck |
+| Two-way portal pair instead of exit-becomes-entry | More strategic — player moves the destination portal |
+| lastExitPortalId defaults to 'A' | Taps initially move B (the portal user wants to position) |
+| Portal A checked before B on overlap | Deterministic — if both overlap (shouldn't happen), A wins |
+| Constant-velocity puck, no gravity | Straight-line motion makes portal chaining predictable |
+| Speed normalized every tick | Prevents energy loss/gain from bounces or drift |
+| Restitution 1.0, friction 0 | Perfectly elastic bounces |
+| BALL_SPEED = 4 | Balanced speed at 60fps |
+| MIN_PORTAL_PUCK_DIST = 40 | Prevents placing portal on top of moving puck |
+| Movable portal has white border | Visual indicator of which portal will move on tap |

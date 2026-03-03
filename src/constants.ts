@@ -18,9 +18,11 @@ export const BALL_SPEED = 4;
 export const TELEPORT_COOLDOWN = 150;
 export const TELEPORT_OFFSET = BALL_RADIUS + (PORTAL_THICKNESS / 2) + 2;
 export const MIN_PORTAL_DISTANCE = 40;
+export const MIN_PORTAL_PUCK_DIST = 40;
 
 export type PortalSide = 'Top' | 'Bottom' | 'Left' | 'Right';
 export type Vec2 = { x: number; y: number };
+export type PortalId = 'A' | 'B';
 
 export const ARENA_RECT = {
   left: 0,
@@ -45,18 +47,18 @@ export interface PortalState {
   normal: Vec2;
 }
 
-export const INITIAL_ENTRY_PORTAL: PortalState = {
+export const DEFAULT_PORTAL_A: PortalState = {
   x: ARENA_WIDTH / 2,
   y: ARENA_HEIGHT - 10,
   side: 'Bottom',
   normal: { x: 0, y: -1 },
 };
 
-export const DEFAULT_EXIT_PORTAL: PortalState = {
+export const DEFAULT_PORTAL_B: PortalState = {
   x: ARENA_WIDTH,
   y: ARENA_HEIGHT / 2,
   side: 'Right',
   normal: { x: -1, y: 0 },
 };
 
-export type GameState = 'PlacingPortal' | 'Ready' | 'Running' | 'PlacingNextExit';
+export type GameState = 'PlacingPortal' | 'Ready' | 'Running';

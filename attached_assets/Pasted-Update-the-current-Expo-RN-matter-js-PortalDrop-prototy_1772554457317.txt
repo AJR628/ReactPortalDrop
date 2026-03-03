@@ -1,0 +1,69 @@
+Update the current Expo + RN + matter-js PortalDrop prototype to a “two-way portal pair” system.
+
+CURRENT BEHAVIOR
+- Constant straight trajectory puck with wall bounces works.
+- Teleport works from entry to exit.
+- But we currently have “exit becomes entry” style logic. We must remove that.
+
+NEW GAME RULES (AUTHORITATIVE)
+1) Two portals exist at all times: Portal A and Portal B.
+2) Both portals are always visible and always active.
+3) Bidirectional teleport:
+   - If puck overlaps Portal A sensor → teleport to Portal B and exit inward from B’s wall.
+   - If puck overlaps Portal B sensor → teleport to Portal A and exit inward from A’s wall.
+4) Portal movement rule:
+   - When the puck exits a portal, the NEXT user tap moves the OPPOSITE portal (the destination it would teleport to).
+   - Example: puck teleports A→B (exits B). After that, taps move Portal A.
+   - If puck teleports B→A (exits A). After that, taps move Portal B.
+   - This should be automatic—no manual toggle required.
+5) Portals remain on arena boundary only (snap-to-perimeter, corner clamp, tie-break Top→Bottom→Left→Right, quantize OFF).
+
+MOTION RULES
+- Gravity remains OFF forever (engine.gravity.y = 0).
+- Puck speed is constant: each tick normalize velocity to BALL_SPEED.
+- Only direction changes: wall reflection + portal teleport rotation.
+- Wall bounce restitution ~1, friction ~0.
+
+TELEPORT MATH (SAME AS BEFORE)
+- Inward normals by wall:
+  - Top (0, +1), Bottom (0, -1), Left (+1, 0), Right (-1, 0)
+- Teleport when overlapping a portal:
+  angle = signedAngle(entryNormal, exitNormal)
+  vOut = rotate(vIn, angle) then normalize to BALL_SPEED
+- Teleport position:
+  exitPos + exitNormal * TELEPORT_OFFSET
+  TELEPORT_OFFSET = ballRadius + portalThickness/2 + 2 (tweak if needed)
+- Cooldown: 150ms so it won’t immediately retrigger.
+
+IMPLEMENTATION REQUIREMENTS
+A) Remove “exit becomes entry” logic entirely.
+B) Add stable portal identifiers: portalId 'A' and 'B'.
+C) Track lastExitPortalId:
+   - When teleport A→B, set lastExitPortalId = 'B'
+   - When teleport B→A, set lastExitPortalId = 'A'
+D) Tap-to-move portal:
+   - Determine movable portal = opposite of lastExitPortalId.
+     If lastExitPortalId is 'A', movable is 'B'. If 'B', movable is 'A'.
+   - On tap, snap the movable portal to boundary, update its side/normal, update its Matter body position.
+E) Safety:
+   - Do not allow moving a portal within MIN_PORTAL_PUCK_DIST (e.g. 40px) of the puck’s current position (ignore tap or clamp).
+   - Do not allow placing portal too close to the other portal (min distance threshold).
+F) UI:
+   - Keep DROP and RESET.
+   - Add small label: “Tap moves Portal A” or “Tap moves Portal B”
+   - Visually highlight the movable portal (slightly brighter border).
+
+ACCEPTANCE CHECKS
+1) Place Portal B on left wall, Portal A on bottom (defaults). Press DROP.
+2) Puck teleports through A→B, exits B inward (left wall => velocity points right).
+3) Puck bounces off walls. If it returns into B, it teleports B→A and exits A inward.
+4) After exiting B, taps move A (opposite). After exiting A, taps move B (opposite).
+5) RESET restores both portals to default positions and lastExitPortalId reset (choose default and document it).
+
+FILES
+- Make minimal edits to existing architecture:
+  - app/index.tsx (tap behavior + UI label + lastExitPortalId)
+  - src/physics.ts (bidirectional portal collision handling + teleport)
+  - src/constants.ts (MIN_PORTAL_PUCK_DIST, TELEPORT_OFFSET, BALL_SPEED)
+  - docs/PORTAL_DROP_RN_SPEC.md (update to bidirectional portals + opposite-move rule)
+Do not add new features beyond this.
