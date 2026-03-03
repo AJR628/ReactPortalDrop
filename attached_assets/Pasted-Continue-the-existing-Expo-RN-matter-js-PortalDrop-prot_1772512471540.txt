@@ -1,0 +1,63 @@
+Continue the existing Expo + RN + matter-js PortalDrop prototype in this repo. The ball now drops, but it “sticks” on the 2nd portal after teleport. Fix so the ball stays in continuous motion.
+
+Root cause (must address):
+- app/index.tsx stops simulation after teleport by:
+  - engine.gravity.y = 0
+  - setting velocity to 0
+  - switching gameState to PlacingNextExit (which halts the RAF loop because loop only runs in Running)
+We need the loop to continue while the player is placing the next portal.
+
+GOAL
+- After teleport, the ball exits the chosen portal and continues moving into the arena.
+- Player can place the next portal while the ball is still moving (perpetual gameplay).
+- Reset returns to clean initial state.
+
+STRICT REQUIREMENTS (anti-drift)
+- Do NOT add new features (no levels, no obstacles, no scoring).
+- Keep architecture mostly the same; minimal changes in app/index.tsx and constants only if needed.
+- Preserve teleport rotation rule: rotate velocity by signedAngle(entryNormal, exitNormal), preserve speed.
+- Exit portal becomes new entry portal after teleport.
+
+IMPLEMENTATION CHANGES (do these explicitly)
+1) Decouple “physics loop running” from gameState:
+   - Introduce a ref: simActiveRef boolean.
+   - Start a single requestAnimationFrame loop ONCE (on mount) that continues running.
+   - Inside that loop: only call Matter.Engine.update(engine, FIXED_DT) when simActiveRef.current === true.
+   - This prevents simulation from stopping when UI state changes (PlacingNextExit / Ready).
+
+2) Start behavior:
+   - On DROP: simActiveRef.current = true; engine.gravity.y = 1;
+   - Reset ball to spawn and zero velocity before starting.
+
+3) Teleport behavior:
+   - Remove these lines after teleport:
+     - engine.gravity.y = 0
+     - Body.setVelocity(ball, {0,0})
+     - Body.setAngularVelocity(ball, 0)
+   - After teleport, keep simActiveRef true and keep gravity on so motion continues.
+   - Still set entryPortal = old exitPortal (exit becomes new entry).
+   - Set UI state to “PlacingNextExit” so the player knows to place the next exit.
+
+4) Allow portal placement while simulation continues:
+   - In handleArenaTap: allow taps when gameState is PlacingPortal, Ready, or PlacingNextExit.
+   - Do not block taps just because simActive is true.
+   - BUT: do not allow moving portals during the exact frame of teleport; cooldown already exists.
+
+5) Prevent immediate “re-overlap” with the new entry portal:
+   - Increase TELEPORT_OFFSET slightly so the ball is placed fully clear of the portal rectangle:
+     - TELEPORT_OFFSET = BALL_RADIUS + (PORTAL_THICKNESS / 2) + 2
+   - After teleport, also force wake:
+     - Matter.Sleeping.set(ball, false)
+   - Keep TELEPORT_COOLDOWN = 150ms.
+
+ACCEPTANCE CHECKS
+- Place exit on left wall; press DROP; ball falls → enters entry portal → exits left portal moving right into arena and continues moving.
+- Immediately after teleport, the game does NOT freeze; the ball keeps moving.
+- UI changes to “Place Next Exit” while ball continues moving.
+- Player can place a new exit portal while ball is moving; when ball later hits the current entry portal, it teleports to the new exit correctly.
+- Reset always restores initial state and the ball drops again.
+
+Deliver changes as minimal diffs in:
+- app/index.tsx (loop + teleport block + placement gating)
+- src/constants.ts (TELEPORT_OFFSET update)
+Optionally update docs/PORTAL_DROP_RN_SPEC.md with “continuous sim loop + simActiveRef” note.

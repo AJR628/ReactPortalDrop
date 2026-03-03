@@ -112,7 +112,7 @@ Given a tap point in arena coordinates (using `locationX`/`locationY`):
 | Use Matter.js directly instead of react-native-game-engine | Simpler, fewer dependencies, requestAnimationFrame loop is sufficient |
 | Ball overlap check uses AABB expansion instead of Matter.js sensors | More reliable, avoids sensor quirks |
 | Ball created dynamic, frozen via gravity=0 | `setStatic(false)` is unreliable in matter-js; gravity toggle is deterministic |
-| After teleport, ball freezes and drops from spawn on next DROP | Consistent behavior regardless of exit portal position |
+| After teleport, ball keeps moving while user places next exit | Continuous motion via simActiveRef decoupled from gameState |
 | Portals rendered as colored bars flush with arena wall | Simple, clear visual indicator |
 | Entry portal is dynamic state (not constant) for perpetual loop | Exit becomes entry after each teleport |
 | MIN_PORTAL_DISTANCE = 40px prevents exit overlapping entry | Avoids degenerate teleport loops |

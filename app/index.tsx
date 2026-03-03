@@ -74,6 +74,7 @@ export default function PortalDropGame() {
   const ballRef = useRef<Matter.Body | null>(null);
   const lastTeleportRef = useRef(0);
   const animFrameRef = useRef<number | null>(null);
+  const simActiveRef = useRef(false);
   const gameStateRef = useRef<GameState>('PlacingPortal');
   const entryPortalRef = useRef<PortalState>(INITIAL_ENTRY_PORTAL);
   const exitPortalRef = useRef<PortalState>(DEFAULT_EXIT_PORTAL);
@@ -96,93 +97,66 @@ export default function PortalDropGame() {
     const { engine, ball } = createPhysicsWorld();
     engineRef.current = engine;
     ballRef.current = ball;
-    return () => {
-      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
-      Matter.Engine.clear(engine);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (gameState !== 'Running') {
-      if (animFrameRef.current) {
-        cancelAnimationFrame(animFrameRef.current);
-        animFrameRef.current = null;
-      }
-      return;
-    }
-
-    const engine = engineRef.current;
-    const ball = ballRef.current;
-    if (!engine || !ball) return;
-
-    startBall(engine, ball);
 
     let lastTime = performance.now();
 
     const loop = (now: number) => {
-      if (gameStateRef.current !== 'Running') return;
-
       const elapsed = now - lastTime;
       lastTime = now;
-      const steps = Math.min(Math.floor(elapsed / FIXED_DT), 4);
 
-      for (let i = 0; i < Math.max(steps, 1); i++) {
-        Matter.Engine.update(engine, FIXED_DT);
-      }
-
-      const bx = ball.position.x;
-      const by = ball.position.y;
-      setBallPos({ x: bx, y: by });
-
-      const currentEntry = entryPortalRef.current;
-      if (
-        ballOverlapsPortal(bx, by, currentEntry) &&
-        now - lastTeleportRef.current > TELEPORT_COOLDOWN
-      ) {
-        const ep = exitPortalRef.current;
-        const angle = signedAngle(currentEntry.normal, ep.normal);
-        const vIn = ball.velocity;
-        const speed = magnitude(vIn);
-
-        if (speed < 0.5) {
-          animFrameRef.current = requestAnimationFrame(loop);
-          return;
+      if (simActiveRef.current) {
+        const steps = Math.min(Math.floor(elapsed / FIXED_DT), 4);
+        for (let i = 0; i < Math.max(steps, 1); i++) {
+          Matter.Engine.update(engine, FIXED_DT);
         }
 
-        let vOut = rotateVec(vIn, angle);
-        const outSpeed = magnitude(vOut);
-        if (outSpeed > 0.001) {
-          vOut = scale(vOut, speed / outSpeed);
+        const bx = ball.position.x;
+        const by = ball.position.y;
+        setBallPos({ x: bx, y: by });
+
+        const currentEntry = entryPortalRef.current;
+        if (
+          ballOverlapsPortal(bx, by, currentEntry) &&
+          now - lastTeleportRef.current > TELEPORT_COOLDOWN
+        ) {
+          const ep = exitPortalRef.current;
+          const angle = signedAngle(currentEntry.normal, ep.normal);
+          const vIn = ball.velocity;
+          const speed = magnitude(vIn);
+
+          if (speed >= 0.5) {
+            let vOut = rotateVec(vIn, angle);
+            const outSpeed = magnitude(vOut);
+            if (outSpeed > 0.001) {
+              vOut = scale(vOut, speed / outSpeed);
+            }
+
+            const exitPos = {
+              x: ep.x + ep.normal.x * TELEPORT_OFFSET,
+              y: ep.y + ep.normal.y * TELEPORT_OFFSET,
+            };
+
+            teleportBall(ball, exitPos, vOut);
+            lastTeleportRef.current = now;
+
+            Matter.Sleeping.set(ball, false);
+
+            setTeleportFlash(true);
+            setTimeout(() => setTeleportFlash(false), 150);
+
+            const newEntry: PortalState = { ...ep };
+            setEntryPortal(newEntry);
+            entryPortalRef.current = newEntry;
+
+            setTurnCount((c) => c + 1);
+            setGameState('PlacingNextExit');
+            gameStateRef.current = 'PlacingNextExit';
+
+            if (Platform.OS !== 'web') {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+            }
+          }
         }
-
-        const exitPos = {
-          x: ep.x + ep.normal.x * TELEPORT_OFFSET,
-          y: ep.y + ep.normal.y * TELEPORT_OFFSET,
-        };
-
-        teleportBall(ball, exitPos, vOut);
-        lastTeleportRef.current = now;
-
-        engine.gravity.y = 0;
-        Matter.Body.setVelocity(ball, { x: 0, y: 0 });
-        Matter.Body.setAngularVelocity(ball, 0);
-
-        setTeleportFlash(true);
-        setTimeout(() => setTeleportFlash(false), 150);
-
-        const newEntry: PortalState = { ...ep };
-        setEntryPortal(newEntry);
-        entryPortalRef.current = newEntry;
-
-        setBallPos({ x: exitPos.x, y: exitPos.y });
-        setTurnCount((c) => c + 1);
-        setGameState('PlacingNextExit');
-        gameStateRef.current = 'PlacingNextExit';
-
-        if (Platform.OS !== 'web') {
-          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-        }
-        return;
       }
 
       animFrameRef.current = requestAnimationFrame(loop);
@@ -191,17 +165,15 @@ export default function PortalDropGame() {
     animFrameRef.current = requestAnimationFrame(loop);
 
     return () => {
-      if (animFrameRef.current) {
-        cancelAnimationFrame(animFrameRef.current);
-        animFrameRef.current = null;
-      }
+      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+      Matter.Engine.clear(engine);
     };
-  }, [gameState]);
+  }, []);
 
   const handleArenaTap = useCallback(
     (e: GestureResponderEvent) => {
       const currentState = gameStateRef.current;
-      if (currentState === 'Running') return;
+      if (currentState !== 'PlacingPortal' && currentState !== 'Ready' && currentState !== 'PlacingNextExit' && currentState !== 'Running') return;
 
       let ax: number;
       let ay: number;
@@ -239,9 +211,12 @@ export default function PortalDropGame() {
       setExitPortal(newPortal);
       exitPortalRef.current = newPortal;
 
-      if (currentState === 'PlacingPortal' || currentState === 'PlacingNextExit') {
+      if (currentState === 'PlacingPortal') {
         setGameState('Ready');
         gameStateRef.current = 'Ready';
+      } else if (currentState === 'PlacingNextExit') {
+        setGameState('Running');
+        gameStateRef.current = 'Running';
       }
 
       if (Platform.OS !== 'web') {
@@ -254,6 +229,12 @@ export default function PortalDropGame() {
   const handleStart = useCallback(() => {
     const currentState = gameStateRef.current;
     if (currentState !== 'Ready') return;
+    const engine = engineRef.current;
+    const ball = ballRef.current;
+    if (!engine || !ball) return;
+
+    startBall(engine, ball);
+    simActiveRef.current = true;
     setGameState('Running');
     gameStateRef.current = 'Running';
     if (Platform.OS !== 'web') {
@@ -266,6 +247,7 @@ export default function PortalDropGame() {
     const ball = ballRef.current;
     if (!engine || !ball) return;
 
+    simActiveRef.current = false;
     resetBall(engine, ball);
     setBallPos({ x: SPAWN_X, y: SPAWN_Y });
     setEntryPortal(INITIAL_ENTRY_PORTAL);
@@ -347,7 +329,7 @@ export default function PortalDropGame() {
         ? 'PLACE NEXT EXIT'
         : gameState === 'Ready'
           ? 'READY TO DROP'
-          : 'DROPPING';
+          : 'IN MOTION';
 
   const canStart = gameState === 'Ready';
 

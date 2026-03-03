@@ -15,7 +15,7 @@ export const SPAWN_X = ARENA_WIDTH / 2;
 export const SPAWN_Y = BALL_RADIUS + 40;
 
 export const TELEPORT_COOLDOWN = 150;
-export const TELEPORT_OFFSET = BALL_RADIUS + 5;
+export const TELEPORT_OFFSET = BALL_RADIUS + (PORTAL_THICKNESS / 2) + 2;
 export const MIN_PORTAL_DISTANCE = 40;
 
 export type PortalSide = 'Top' | 'Bottom' | 'Left' | 'Right';

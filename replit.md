@@ -26,10 +26,11 @@ constants/
 ```
 
 ## Game Mechanics
-- **States**: PlacingPortal → Ready → Running → PlacingNextExit → Ready → ...
-- **Teleport**: Velocity rotated by signed angle between entry/exit portal normals
-- **Ball physics**: Dynamic body, frozen via gravity=0 (not isStatic)
-- **Portal placement**: Tap near arena edge, snaps to nearest wall, clamped from corners
+- **States**: PlacingPortal → Ready → Running → PlacingNextExit → Running → ...
+- **Perpetual motion**: After teleport, ball keeps bouncing (sim stays active via simActiveRef). User places next exit while ball moves — no second DROP needed.
+- **Teleport**: Velocity rotated by signed angle between entry/exit portal normals, speed preserved
+- **Ball physics**: Dynamic body, frozen via gravity=0 (not isStatic). RAF loop runs continuously, physics steps gated by simActiveRef.
+- **Portal placement**: Tap near arena edge, snaps to nearest wall, clamped from corners. Allowed during all states except initial.
 
 ## Dependencies
 - matter-js (2D physics)
