@@ -103,9 +103,10 @@ Given a tap point in arena coordinates:
 | `src/constants.ts` | Arena dims, BALL_SPEED, portal defaults (A/B), PortalId type, game states |
 | `src/math.ts` | Vector rotation, signed angle, magnitude |
 | `src/snap.ts` | Snap-to-perimeter algorithm |
-| `src/physics.ts` | Matter.js engine (zero-gravity, elastic walls), ball start/reset/teleport |
-| `app/index.tsx` | Game screen, bidirectional teleport loop, alternating tap portal movement, UI |
-| `constants/colors.ts` | Portal A/B colors, theme |
+| `src/levels.ts` | Level definitions (8 rooms), GoalZone, RectObstacle types |
+| `src/physics.ts` | Matter.js engine (zero-gravity, elastic walls), ball start/reset/teleport, obstacle management |
+| `app/index.tsx` | Game screen, teleport loop, tap movement, level/room transitions, goal detection, UI |
+| `constants/colors.ts` | Portal A/B colors, goal/obstacle colors, theme |
 
 ## Acceptance Checks
 1. Press LAUNCH: puck moves straight down at constant speed.
@@ -116,9 +117,42 @@ Given a tap point in arena coordinates:
 6. After exiting A, first tap moves Portal A. Alternation continues.
 7. RESET restores both portals to defaults, puck to spawn, nextMovePortalId to 'B'.
 
-## Non-Goals (MVP)
-- No level system
-- No scoring beyond turn counter
+## Rooms & Doorway System
+
+### Goal Doorway
+- Each room has a GREEN doorway segment on one wall (Right wall in wave 1).
+- If the puck reaches the doorway, the game advances to the next room.
+- Detection: geometric overlap check (`ballCrossesGoal`) in the RAF loop, not a Matter sensor.
+
+### Levels
+- 8 rooms defined in `src/levels.ts`.
+- Each level specifies: `id`, `goal` (GoalZone), `obstacles` (RectObstacle[]).
+- GoalZone: `{ side, center, length, thickness }` — the green doorway position/size.
+- RectObstacle: `{ x, y, w, h }` — center-based rectangle positions.
+- Obstacle count increases gradually: 0 → 1 → 1 → 2 → 2 → 3 → 4 → 5.
+- Goal side is always 'Right' in wave 1.
+
+### Obstacles
+- Static Matter.js rectangles with `restitution: 1.0`, `friction: 0`.
+- Managed via `setLevelObstacles()` / `clearLevelBodies()` in physics.ts.
+- Rendered as dark gray rectangles in the arena.
+
+### Room Transition (Slide Animation)
+1. Puck hits doorway → `isTransitioning = true`, freeze sim.
+2. Animate arena sliding left (`translateX: 0 → -ARENA_WIDTH`, 300ms).
+3. Increment `levelIndex`, load new obstacles, position puck at left entry point.
+4. Animate arena sliding in from right (`translateX: ARENA_WIDTH → 0`, 300ms).
+5. Resume sim, set `isTransitioning = false`.
+- During transition: taps are ignored, teleport checks skipped.
+- Puck velocity is preserved (normalized) across rooms.
+- Puck entry position: `x = BALL_RADIUS + WALL_THICKNESS + 2`, `y = clamped previous y`.
+
+### Win Condition
+- After clearing all 8 rooms, a "YOU WIN!" overlay appears.
+- RESET returns to Room 1 with all state cleared.
+
+## Non-Goals (Current Wave)
+- No scoring, timers, slow-mo, pause, curve, powerups
 - No particles or sound
 - No backend, auth, ads, purchases
 - No navigation or multiple screens
@@ -136,3 +170,8 @@ Given a tap point in arena coordinates:
 | BALL_SPEED = 4 | Balanced speed at 60fps |
 | MIN_PORTAL_PUCK_DIST = 40 | Prevents placing portal on top of moving puck |
 | Movable portal has white border | Visual indicator of which portal will move on tap |
+| Goal always on Right wall (wave 1) | Simplifies slide direction (always slide left) |
+| Geometric goal detection, not Matter sensor | Simpler and more reliable for wall-edge doorways |
+| Animated (RN built-in) for slide transitions | No reanimated dependency needed for simple translateX |
+| 8 levels with increasing obstacles | Gradual difficulty curve |
+| "YOU WIN!" overlay after room 8 | Simple end state, RESET returns to room 1 |

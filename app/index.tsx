@@ -6,6 +6,7 @@ import {
   StyleSheet,
   Platform,
   GestureResponderEvent,
+  Animated,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -17,6 +18,7 @@ import {
   ARENA_HEIGHT,
   BALL_RADIUS,
   BALL_SPEED,
+  WALL_THICKNESS,
   PORTAL_LENGTH,
   PORTAL_THICKNESS,
   TELEPORT_COOLDOWN,
@@ -34,9 +36,18 @@ import {
 } from '@/src/constants';
 import { signedAngle, rotateVec, magnitude, scale } from '@/src/math';
 import { snapToPerimeter } from '@/src/snap';
-import { createPhysicsWorld, startBall, resetBall, teleportBall } from '@/src/physics';
+import {
+  createPhysicsWorld,
+  startBall,
+  resetBall,
+  teleportBall,
+  setLevelObstacles,
+  clearLevelBodies,
+} from '@/src/physics';
+import { LEVELS, GoalZone, RectObstacle } from '@/src/levels';
 
 const FIXED_DT = 1000 / 60;
+const TRANSITION_DURATION = 300;
 
 function ballOverlapsPortal(
   bx: number,
@@ -63,6 +74,39 @@ function portalDistance(a: PortalState, b: PortalState): number {
   return dist(a.x, a.y, b.x, b.y);
 }
 
+function ballCrossesGoal(
+  bx: number,
+  by: number,
+  r: number,
+  goal: GoalZone
+): boolean {
+  if (goal.side === 'Right') {
+    return (
+      bx + r >= ARENA_WIDTH - goal.thickness &&
+      Math.abs(by - goal.center) <= goal.length / 2 + r
+    );
+  }
+  if (goal.side === 'Left') {
+    return (
+      bx - r <= goal.thickness &&
+      Math.abs(by - goal.center) <= goal.length / 2 + r
+    );
+  }
+  if (goal.side === 'Bottom') {
+    return (
+      by + r >= ARENA_HEIGHT - goal.thickness &&
+      Math.abs(bx - goal.center) <= goal.length / 2 + r
+    );
+  }
+  if (goal.side === 'Top') {
+    return (
+      by - r <= goal.thickness &&
+      Math.abs(bx - goal.center) <= goal.length / 2 + r
+    );
+  }
+  return false;
+}
+
 export default function PortalDropGame() {
   const insets = useSafeAreaInsets();
   const webTopInset = Platform.OS === 'web' ? 67 : 0;
@@ -77,6 +121,8 @@ export default function PortalDropGame() {
   const [teleportFlash, setTeleportFlash] = useState(false);
   const [turnCount, setTurnCount] = useState(0);
   const [nextMovePortalId, setNextMovePortalId] = useState<PortalId>('B');
+  const [levelIndex, setLevelIndex] = useState(0);
+  const [showWin, setShowWin] = useState(false);
 
   const engineRef = useRef<Matter.Engine | null>(null);
   const ballRef = useRef<Matter.Body | null>(null);
@@ -90,6 +136,11 @@ export default function PortalDropGame() {
   const ballPosRef = useRef<Vec2>({ x: SPAWN_X, y: SPAWN_Y });
   const arenaLayoutRef = useRef({ x: 0, y: 0 });
   const arenaViewRef = useRef<View>(null);
+  const levelBodiesRef = useRef<Matter.Body[]>([]);
+  const isTransitioningRef = useRef(false);
+  const levelIndexRef = useRef(0);
+
+  const roomTranslateX = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     gameStateRef.current = gameState;
@@ -103,10 +154,22 @@ export default function PortalDropGame() {
     portalBRef.current = portalB;
   }, [portalB]);
 
+  const loadLevelObstacles = useCallback((idx: number) => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    clearLevelBodies(engine, levelBodiesRef.current);
+    const level = LEVELS[idx];
+    const bodies = setLevelObstacles(engine, level.obstacles);
+    levelBodiesRef.current = bodies;
+  }, []);
+
   useEffect(() => {
     const { engine, ball } = createPhysicsWorld();
     engineRef.current = engine;
     ballRef.current = ball;
+
+    const bodies = setLevelObstacles(engine, LEVELS[0].obstacles);
+    levelBodiesRef.current = bodies;
 
     let lastTime = performance.now();
 
@@ -136,11 +199,18 @@ export default function PortalDropGame() {
         setBallPos({ x: bx, y: by });
         ballPosRef.current = { x: bx, y: by };
 
+        if (!isTransitioningRef.current) {
+          const currentLevel = LEVELS[levelIndexRef.current];
+          if (ballCrossesGoal(bx, by, BALL_RADIUS, currentLevel.goal)) {
+            triggerAdvanceRoom();
+          }
+        }
+
         const pA = portalARef.current;
         const pB = portalBRef.current;
         const cooldownOk = now - lastTeleportRef.current > TELEPORT_COOLDOWN;
 
-        if (cooldownOk) {
+        if (cooldownOk && !isTransitioningRef.current) {
           let entryPortal: PortalState | null = null;
           let exitPortal: PortalState | null = null;
           let exitId: PortalId | null = null;
@@ -202,8 +272,73 @@ export default function PortalDropGame() {
     };
   }, []);
 
+  const triggerAdvanceRoom = useCallback(() => {
+    if (isTransitioningRef.current) return;
+    isTransitioningRef.current = true;
+
+    const ball = ballRef.current;
+    const engine = engineRef.current;
+    if (!ball || !engine) return;
+
+    const savedVelocity = { x: ball.velocity.x, y: ball.velocity.y };
+    simActiveRef.current = false;
+
+    if (Platform.OS !== 'web') {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    }
+
+    Animated.timing(roomTranslateX, {
+      toValue: -ARENA_WIDTH,
+      duration: TRANSITION_DURATION,
+      useNativeDriver: true,
+    }).start(() => {
+      const nextIdx = levelIndexRef.current + 1;
+
+      if (nextIdx >= LEVELS.length) {
+        isTransitioningRef.current = false;
+        setShowWin(true);
+        roomTranslateX.setValue(0);
+        return;
+      }
+
+      levelIndexRef.current = nextIdx;
+      setLevelIndex(nextIdx);
+
+      loadLevelObstacles(nextIdx);
+
+      const entryX = BALL_RADIUS + WALL_THICKNESS + 2;
+      const entryY = Math.max(
+        BALL_RADIUS + WALL_THICKNESS,
+        Math.min(ball.position.y, ARENA_HEIGHT - BALL_RADIUS - WALL_THICKNESS)
+      );
+      Matter.Body.setPosition(ball, { x: entryX, y: entryY });
+      setBallPos({ x: entryX, y: entryY });
+      ballPosRef.current = { x: entryX, y: entryY };
+
+      const speed = magnitude(savedVelocity);
+      if (speed > 0.01) {
+        const normalized = scale(savedVelocity, BALL_SPEED / speed);
+        Matter.Body.setVelocity(ball, normalized);
+      } else {
+        Matter.Body.setVelocity(ball, { x: BALL_SPEED, y: 0 });
+      }
+
+      roomTranslateX.setValue(ARENA_WIDTH);
+
+      Animated.timing(roomTranslateX, {
+        toValue: 0,
+        duration: TRANSITION_DURATION,
+        useNativeDriver: true,
+      }).start(() => {
+        simActiveRef.current = true;
+        isTransitioningRef.current = false;
+      });
+    });
+  }, [roomTranslateX, loadLevelObstacles]);
+
   const handleArenaTap = useCallback(
     (e: GestureResponderEvent) => {
+      if (isTransitioningRef.current) return;
       const currentState = gameStateRef.current;
       if (currentState !== 'PlacingPortal' && currentState !== 'Ready' && currentState !== 'Running') return;
 
@@ -301,6 +436,7 @@ export default function PortalDropGame() {
     if (!engine || !ball) return;
 
     simActiveRef.current = false;
+    isTransitioningRef.current = false;
     resetBall(engine, ball);
     setBallPos({ x: SPAWN_X, y: SPAWN_Y });
     ballPosRef.current = { x: SPAWN_X, y: SPAWN_Y };
@@ -314,11 +450,19 @@ export default function PortalDropGame() {
     gameStateRef.current = 'PlacingPortal';
     lastTeleportRef.current = 0;
     setTurnCount(0);
+    setLevelIndex(0);
+    levelIndexRef.current = 0;
+    setShowWin(false);
+    roomTranslateX.setValue(0);
+
+    loadLevelObstacles(0);
 
     if (Platform.OS !== 'web') {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     }
-  }, []);
+  }, [roomTranslateX, loadLevelObstacles]);
+
+  const currentLevel = LEVELS[levelIndex];
 
   const renderPortal = (
     portal: PortalState,
@@ -381,6 +525,62 @@ export default function PortalDropGame() {
     );
   };
 
+  const renderGoal = (goal: GoalZone) => {
+    let left: number;
+    let top: number;
+    let w: number;
+    let h: number;
+
+    if (goal.side === 'Right') {
+      left = ARENA_WIDTH - goal.thickness;
+      top = goal.center - goal.length / 2;
+      w = goal.thickness;
+      h = goal.length;
+    } else if (goal.side === 'Left') {
+      left = 0;
+      top = goal.center - goal.length / 2;
+      w = goal.thickness;
+      h = goal.length;
+    } else if (goal.side === 'Bottom') {
+      left = goal.center - goal.length / 2;
+      top = ARENA_HEIGHT - goal.thickness;
+      w = goal.length;
+      h = goal.thickness;
+    } else {
+      left = goal.center - goal.length / 2;
+      top = 0;
+      w = goal.length;
+      h = goal.thickness;
+    }
+
+    return (
+      <View
+        key="goal"
+        style={[
+          styles.goalZone,
+          { left, top, width: w, height: h },
+        ]}
+      />
+    );
+  };
+
+  const renderObstacles = (obstacles: RectObstacle[]) => {
+    return obstacles.map((o, i) => (
+      <View
+        key={`obs-${i}`}
+        style={[
+          styles.obstacle,
+          {
+            left: o.x - o.w / 2,
+            top: o.y - o.h / 2,
+            width: o.w,
+            height: o.h,
+          },
+        ]}
+      />
+    ));
+  };
+
   const stateLabel =
     gameState === 'PlacingPortal'
       ? 'PLACE PORTAL'
@@ -417,60 +617,75 @@ export default function PortalDropGame() {
             </Text>
           )}
         </View>
-        <Text style={[
-          styles.movableLabel,
-          { color: nextMovePortalId === 'A' ? Colors.portalA : Colors.portalB },
-        ]}>
-          {movableLabel}
-        </Text>
+        <View style={styles.subHeaderRow}>
+          <Text style={[
+            styles.movableLabel,
+            { color: nextMovePortalId === 'A' ? Colors.portalA : Colors.portalB },
+          ]}>
+            {movableLabel}
+          </Text>
+          <Text style={styles.roomLabel}>ROOM {levelIndex + 1}</Text>
+        </View>
       </View>
 
       <View style={styles.arenaWrapper}>
-        <Pressable
-          ref={arenaViewRef}
-          onLayout={() => {
-            arenaViewRef.current?.measureInWindow((x: number, y: number) => {
-              arenaLayoutRef.current = { x, y };
-            });
-          }}
-          onPress={handleArenaTap}
-          style={[
-            styles.arena,
-            teleportFlash && styles.arenaFlash,
-          ]}
-        >
-          {renderPortal(
-            portalA,
-            Colors.portalA,
-            Colors.portalAGlow,
-            'A',
-            nextMovePortalId === 'A'
-          )}
-          {renderPortal(
-            portalB,
-            Colors.portalB,
-            Colors.portalBGlow,
-            'B',
-            nextMovePortalId === 'B'
-          )}
-
-          <View style={styles.spawnIndicator}>
-            <View style={styles.spawnCross} />
-            <View style={[styles.spawnCross, styles.spawnCrossH]} />
-          </View>
-
-          <View
+        <Animated.View style={{ transform: [{ translateX: roomTranslateX }] }}>
+          <Pressable
+            ref={arenaViewRef}
+            onLayout={() => {
+              arenaViewRef.current?.measureInWindow((x: number, y: number) => {
+                arenaLayoutRef.current = { x, y };
+              });
+            }}
+            onPress={handleArenaTap}
             style={[
-              styles.ball,
-              {
-                left: ballPos.x - BALL_RADIUS,
-                top: ballPos.y - BALL_RADIUS,
-              },
+              styles.arena,
+              teleportFlash && styles.arenaFlash,
             ]}
           >
-            <View style={styles.ballInner} />
-          </View>
-        </Pressable>
+            {renderGoal(currentLevel.goal)}
+            {renderObstacles(currentLevel.obstacles)}
+
+            {renderPortal(
+              portalA,
+              Colors.portalA,
+              Colors.portalAGlow,
+              'A',
+              nextMovePortalId === 'A'
+            )}
+            {renderPortal(
+              portalB,
+              Colors.portalB,
+              Colors.portalBGlow,
+              'B',
+              nextMovePortalId === 'B'
+            )}
+
+            <View style={styles.spawnIndicator}>
+              <View style={styles.spawnCross} />
+              <View style={[styles.spawnCross, styles.spawnCrossH]} />
+            </View>
+
+            <View
+              style={[
+                styles.ball,
+                {
+                  left: ballPos.x - BALL_RADIUS,
+                  top: ballPos.y - BALL_RADIUS,
+                },
+              ]}
+            >
+              <View style={styles.ballInner} />
+            </View>
+
+            {showWin && (
+              <View style={styles.winOverlay}>
+                <Text style={styles.winText}>YOU WIN!</Text>
+                <Text style={styles.winSubtext}>All 8 rooms cleared</Text>
+              </View>
+            )}
+          </Pressable>
+        </Animated.View>
       </View>
 
       <View style={[styles.controls, { paddingBottom: bottomInset + 16 }]}>
@@ -525,6 +740,12 @@ export default function PortalDropGame() {
           />
           <Text style={styles.legendText}>Portal B</Text>
         </View>
+        <View style={styles.legendItem}>
+          <View
+            style={[styles.legendDot, { backgroundColor: Colors.goal }]}
+          />
+          <Text style={styles.legendText}>Doorway</Text>
+        </View>
       </View>
     </View>
   );
@@ -570,16 +791,28 @@ const styles = StyleSheet.create({
     color: Colors.portalB,
     letterSpacing: 1,
   },
+  subHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
+    marginTop: 4,
+  },
   movableLabel: {
     fontFamily: 'Inter_600SemiBold',
     fontSize: 10,
     letterSpacing: 2,
-    marginTop: 4,
+  },
+  roomLabel: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 10,
+    letterSpacing: 2,
+    color: Colors.goal,
   },
   arenaWrapper: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    overflow: 'hidden',
   },
   arena: {
     width: ARENA_WIDTH,
@@ -604,6 +837,23 @@ const styles = StyleSheet.create({
     right: -4,
     bottom: -4,
     opacity: 0.4,
+  },
+  goalZone: {
+    position: 'absolute',
+    backgroundColor: Colors.goal,
+    zIndex: 1,
+    shadowColor: Colors.goal,
+    shadowOpacity: 0.6,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 0 },
+  },
+  obstacle: {
+    position: 'absolute',
+    backgroundColor: Colors.obstacle,
+    borderWidth: 1,
+    borderColor: Colors.obstacleBorder,
+    borderRadius: 2,
+    zIndex: 1,
   },
   spawnIndicator: {
     position: 'absolute',
@@ -641,6 +891,30 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.6,
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 0 },
+  },
+  winOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(8, 8, 14, 0.85)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 20,
+  },
+  winText: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 32,
+    color: Colors.goal,
+    letterSpacing: 4,
+  },
+  winSubtext: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 14,
+    color: Colors.textDim,
+    marginTop: 8,
+    letterSpacing: 1,
   },
   controls: {
     flexDirection: 'row',

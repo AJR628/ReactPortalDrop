@@ -13,16 +13,17 @@ Portal Drop is a 2D physics puzzle prototype built with Expo + React Native + Ma
 ```
 app/
   _layout.tsx         # Root layout with fonts, providers, StatusBar
-  index.tsx           # Main game screen (game loop, rendering, input)
+  index.tsx           # Main game screen (game loop, rendering, input, room transitions)
 src/
   constants.ts        # Arena dimensions, physics constants, PortalId type
   math.ts             # Vector math (signedAngle, rotateVec, magnitude, scale)
   snap.ts             # Snap-to-perimeter algorithm
-  physics.ts          # Matter.js world setup, ball control
+  physics.ts          # Matter.js world setup, ball control, obstacle management
+  levels.ts           # 8 level definitions (goal doorway + obstacles per room)
 docs/
   PORTAL_DROP_RN_SPEC.md  # SSOT specification document
 constants/
-  colors.ts           # Dark sci-fi color theme (portalA blue, portalB purple)
+  colors.ts           # Dark sci-fi color theme (portals, goal green, obstacles)
 ```
 
 ## Game Mechanics
@@ -33,6 +34,10 @@ constants/
 - **Motion model**: Constant-velocity puck (BALL_SPEED=4). No gravity. Velocity normalized every tick.
 - **Wall bounce**: Elastic (restitution 1.0, friction 0). Straight-line bounces.
 - **Safety**: Cannot place portal within 40px of other portal or puck.
+- **Rooms**: 8 levels with increasing obstacles. Green doorway on right wall advances to next room.
+- **Room transition**: Slide animation (300ms each direction). Puck velocity preserved across rooms.
+- **Obstacles**: Static Matter.js rectangles that bounce the puck. Added/removed per level.
+- **Win**: "YOU WIN!" overlay after clearing all 8 rooms. RESET returns to Room 1.
 
 ## Dependencies
 - matter-js (2D physics)

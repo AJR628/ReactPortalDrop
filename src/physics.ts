@@ -62,3 +62,29 @@ export function teleportBall(
   Matter.Body.setPosition(ball, exitPos);
   Matter.Body.setVelocity(ball, newVelocity);
 }
+
+export function setLevelObstacles(
+  engine: Matter.Engine,
+  obstacles: { x: number; y: number; w: number; h: number }[]
+): Matter.Body[] {
+  const bodies = obstacles.map((o) =>
+    Matter.Bodies.rectangle(o.x, o.y, o.w, o.h, {
+      isStatic: true,
+      friction: 0,
+      restitution: 1.0,
+    })
+  );
+  if (bodies.length > 0) {
+    Matter.Composite.add(engine.world, bodies);
+  }
+  return bodies;
+}
+
+export function clearLevelBodies(
+  engine: Matter.Engine,
+  bodies: Matter.Body[]
+): void {
+  if (bodies.length > 0) {
+    Matter.Composite.remove(engine.world, bodies);
+  }
+}

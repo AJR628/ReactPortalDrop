@@ -16,6 +16,10 @@ const Colors = {
   buttonActive: '#252540',
   accent: '#00AAFF',
   accentAlt: '#AA44FF',
+  goal: '#44FF88',
+  goalGlow: 'rgba(68, 255, 136, 0.3)',
+  obstacle: '#2A2A3A',
+  obstacleBorder: '#3A3A50',
   danger: '#FF4466',
   light: {
     text: '#E0E0F0',

@@ -1,0 +1,99 @@
+You are the Replit Agent. Continue the existing Expo + React Native + matter-js PortalDrop prototype in this repo. The portal + puck loop is working well. Now turn it into an actual game with rooms/levels.
+
+CURRENT CODEBASE (do not rewrite architecture)
+- app/index.tsx holds the main loop, teleport check, input placement, UI
+- src/constants.ts holds arena sizing + portal constants
+- src/physics.ts creates Matter engine, walls, ball, start/reset/teleport
+- src/snap.ts handles snap-to-perimeter
+- src/math.ts has rotate/signedAngle helpers
+- docs/PORTAL_DROP_RN_SPEC.md exists (keep updated)
+
+GOAL (Wave: Rooms + Doorway)
+1) Add a GREEN “doorway” segment on a wall each room.
+2) If the puck passes through the doorway, the game advances to the next room.
+3) Room transition should feel continuous: the screen slides into a new room (like the puck went through a door).
+4) Each room has more obstacles (static walls) inside the arena that the puck can bounce off.
+5) Keep portals working exactly as they do now (no portal behavior changes in this wave).
+
+ANTI-DRIFT RULES
+- Minimal changes only. No new gameplay features besides: doorway + levels + obstacles + slide transition.
+- No scoring, no timers, no slow-mo, no pause, no curve yet.
+- Keep the existing portal placement + teleport logic as-is.
+- Update SSOT doc with the new level/doorway rules.
+
+IMPLEMENTATION PLAN (do exactly)
+A) Add a level definition file
+- Create src/levels.ts exporting:
+  type Level = { id: string; goal: GoalZone; obstacles: RectObstacle[] }
+  type GoalZone = { side: 'Left'|'Right'|'Top'|'Bottom'; center: number; length: number; thickness: number }
+  type RectObstacle = { x: number; y: number; w: number; h: number }
+- Create at least 8 levels.
+  - For wave 1: keep goal side ALWAYS 'Right' to simplify the slide direction.
+  - Increase obstacle count gradually (0 -> 1 -> 2 -> 4+).
+  - Keep obstacles within arena bounds and away from extreme edges.
+
+B) Obstacles in physics + visuals
+- Update src/physics.ts to support dynamic obstacles per level:
+  - Add functions:
+    setLevelObstacles(engine, obstacles): returns Matter.Body[]
+    clearLevelBodies(engine, bodies): removes them from world
+  - Create obstacles as static rectangles with restitution ~1.0 and friction ~0 so puck stays lively.
+- In app/index.tsx:
+  - Keep a ref levelBodiesRef: Matter.Body[] to track current obstacles.
+  - When level changes: clear previous obstacle bodies, create new ones, store in ref.
+  - Render obstacles as absolutely positioned Views (dark/gray rectangles).
+
+C) Goal doorway detection (simple + reliable)
+- Don’t overcomplicate with Matter sensors initially.
+- Implement a helper in app/index.tsx:
+  ballCrossesGoal(bx, by, ballRadius, goalZone):
+    For Right wall:
+      if bx + r >= ARENA_WIDTH - goal.thickness AND |by - goal.center| <= (goal.length/2 + r) => true
+  (Implement similarly for other sides, but we only use Right in wave 1.)
+- In the main RAF loop (where you already update ballPos):
+  - If not transitioning and ballCrossesGoal(...):
+    triggerAdvanceRoom()
+
+D) Slide transition (continuous “new room” feel)
+- Use React Native Animated (not reanimated).
+- Add state:
+  levelIndex, isTransitioning
+  roomTranslateX = new Animated.Value(0)
+- On goal hit:
+  1) Set isTransitioning = true
+  2) Freeze simActiveRef.current = false for the duration of the slide (short, e.g. 250–350ms)
+  3) Animate roomTranslateX from 0 -> -ARENA_WIDTH (slide current room left)
+  4) After animation completes:
+     - Increment levelIndex
+     - Load the next level obstacles
+     - Move puck to the “entry side” of the next room to preserve the illusion:
+       since goal is on Right wall, next room entry should be on Left:
+       set ball position to x = BALL_RADIUS + WALL_THICKNESS + 2, y = clamp(current y), and KEEP its velocity (or re-normalize)
+     - Reset roomTranslateX to +ARENA_WIDTH (position new room offscreen right)
+  5) Animate roomTranslateX from +ARENA_WIDTH -> 0 (slide new room into view)
+  6) Resume simActiveRef.current = true, set isTransitioning = false
+
+- Important: During transition, disable portal placement taps (ignore taps while isTransitioning).
+
+E) UI
+- Draw the goal doorway as a green rectangle on the wall (right wall).
+- Add a small level indicator: “Room 3”.
+- Keep existing Drop + Reset UI.
+
+FILES TO CHANGE (keep contained)
+- NEW: src/levels.ts
+- UPDATE: src/physics.ts (obstacle add/remove)
+- UPDATE: app/index.tsx (level state, goal check, transition animation, obstacle rendering)
+- UPDATE: docs/PORTAL_DROP_RN_SPEC.md (add “Rooms & Doorway” section + slide rules)
+
+ACCEPTANCE CHECKS
+1) Room 1 has no obstacles and a green doorway on the right wall.
+2) When puck passes through the doorway, the screen slides and Room 2 appears, with 1 obstacle.
+3) Obstacles physically collide with the puck and cause bounces.
+4) Portals still work exactly as before during gameplay.
+5) After 8 rooms, loop back to Room 1 or show a simple “You Win” overlay (choose one and document).
+
+DO NOT ADD
+- slow mo, pause, curve, powerups, scoring, audio, menus (later waves).
+
+Deliver a working implementation and keep the diff minimal and readable.
