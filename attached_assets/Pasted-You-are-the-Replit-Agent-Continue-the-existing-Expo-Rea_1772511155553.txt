@@ -1,0 +1,78 @@
+You are the Replit Agent. Continue the existing Expo + React Native + matter-js Portal Drop prototype in this repo.
+
+CURRENT STATE
+- User can place the EXIT portal anywhere on the arena boundary (good).
+- The ball does NOT drop when pressing DROP (bug).
+- Teleport orientation must be “arena-emergent”: ball exits a portal moving inward toward the arena based on that wall’s inward normal.
+
+GOAL (WAVE 1.5: playable perpetual loop)
+1) DROP must reliably start the ball falling from the spawn point INSIDE the arena.
+2) Ball must enter the current ENTRY portal, teleport, and exit from the placed portal with velocity oriented inward based on portal location (left→right, right→left, top→down, bottom→up).
+3) After a successful teleport, the EXIT portal becomes the new ENTRY portal for the next turn (perpetual loop). The user can place the new EXIT portal, then press DROP again.
+4) Keep this minimal: no levels, no scoring, no obstacles yet, no extra UI beyond what we need.
+
+ANTI-DRIFT RULES
+- Do not change the whole architecture. Keep existing files and structure. Make minimal, targeted edits.
+- Only implement what is listed in this prompt.
+- Add a short Decision Log section to docs/PORTAL_DROP_RN_SPEC.md documenting any assumptions.
+
+CRITICAL FIX: Ball drop behavior
+- Do NOT rely on toggling isStatic for the ball. Keep the ball dynamic and “freeze” by:
+  - engine gravity OFF when not running (engine.gravity.y = 0)
+  - (optional) do not call Engine.update unless in Running
+- On DROP:
+  - reset ball position to spawn
+  - zero velocity + angular velocity
+  - set engine.gravity.y = 1
+  - start stepping engine (if it isn’t already)
+- On RESET:
+  - engine.gravity.y = 0
+  - zero velocity + angular velocity
+  - move ball back to spawn
+  - clear teleport cooldown and state
+
+TELEPORT RULE (authoritative)
+- Portals live on walls. Each portal has PortalSide in {Top, Bottom, Left, Right} and an inward normal:
+  - Top: (0, +1)
+  - Bottom: (0, -1)
+  - Left: (+1, 0)
+  - Right: (-1, 0)
+- When ball overlaps ENTRY portal sensor:
+  - Apply cooldown (150ms) to prevent instant repeat.
+  - Compute rotation:
+    angle = signedAngle(entryNormal, exitNormal)
+    vOut = rotate(vIn, angle)
+  - Preserve speed magnitude exactly.
+  - Teleport position:
+    exitPos + exitNormal * (ballRadius + 5px)
+  - Set ball velocity to vOut.
+
+PERPETUAL LOOP RULE
+- After teleport completes:
+  - set ENTRY portal = the portal the ball just exited from (the previous EXIT)
+  - set gameState = “PlacingNextExit”
+  - allow the user to place the next EXIT portal and press DROP again.
+- ENTRY portal should remain visible and distinct from EXIT portal.
+- Prevent placing EXIT on top of ENTRY (minimum distance threshold, e.g., 40px). If too close, ignore placement.
+
+INPUT RULES
+- Arena taps should use locationX/locationY relative to the arena Pressable (avoid measureInWindow/pageX math).
+- Ignore taps on UI buttons.
+- Snap-to-perimeter should remain: nearest wall, clamp away from corners by (portalHalf + cornerMargin), tie-break Top→Bottom→Left→Right, quantize OFF.
+
+UI / UX (small “sauce” allowed but minimal)
+- Keep DROP and RESET.
+- Add a small status line: “Place exit portal” / “Drop” / “Place next exit”.
+- Optional: subtle “pulse” on the active ENTRY portal.
+
+DELIVERABLES
+1) Fix the ball drop bug using the gravity/dynamic approach above.
+2) Implement teleport direction/orientation correctly for all 4 walls.
+3) Implement perpetual loop: exit becomes next entry after teleport.
+4) Update docs/PORTAL_DROP_RN_SPEC.md with any final locked constants and the perpetual rule.
+
+ACCEPTANCE CHECKS
+- Place exit on left wall → press DROP → ball falls, enters entry portal, exits left portal moving right toward arena.
+- Place exit on top wall → exits moving downward.
+- After teleport, UI tells user to place next exit; placing next exit + DROP repeats the cycle.
+- RESET always returns to initial state and never “stuck” (ball always drops after reset).

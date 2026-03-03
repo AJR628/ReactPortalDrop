@@ -20,12 +20,12 @@ import {
   PORTAL_THICKNESS,
   TELEPORT_COOLDOWN,
   TELEPORT_OFFSET,
-  ENTRY_PORTAL,
+  INITIAL_ENTRY_PORTAL,
   DEFAULT_EXIT_PORTAL,
+  MIN_PORTAL_DISTANCE,
   SPAWN_X,
   SPAWN_Y,
   Vec2,
-  PortalSide,
   PortalState,
   GameState,
 } from '@/src/constants';
@@ -38,9 +38,9 @@ const FIXED_DT = 1000 / 60;
 function ballOverlapsPortal(
   bx: number,
   by: number,
-  portal: PortalState,
-  isHorizontal: boolean
+  portal: PortalState
 ): boolean {
+  const isHorizontal = portal.side === 'Top' || portal.side === 'Bottom';
   const hw = isHorizontal ? PORTAL_LENGTH / 2 : PORTAL_THICKNESS / 2;
   const hh = isHorizontal ? PORTAL_THICKNESS / 2 : PORTAL_LENGTH / 2;
   const closestX = Math.max(portal.x - hw, Math.min(bx, portal.x + hw));
@@ -48,6 +48,12 @@ function ballOverlapsPortal(
   const dx = bx - closestX;
   const dy = by - closestY;
   return dx * dx + dy * dy <= BALL_RADIUS * BALL_RADIUS;
+}
+
+function portalDistance(a: PortalState, b: PortalState): number {
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  return Math.sqrt(dx * dx + dy * dy);
 }
 
 export default function PortalDropGame() {
@@ -58,21 +64,29 @@ export default function PortalDropGame() {
   const bottomInset = Platform.OS === 'web' ? webBottomInset : insets.bottom;
 
   const [gameState, setGameState] = useState<GameState>('PlacingPortal');
+  const [entryPortal, setEntryPortal] = useState<PortalState>(INITIAL_ENTRY_PORTAL);
   const [exitPortal, setExitPortal] = useState<PortalState>(DEFAULT_EXIT_PORTAL);
   const [ballPos, setBallPos] = useState<Vec2>({ x: SPAWN_X, y: SPAWN_Y });
   const [teleportFlash, setTeleportFlash] = useState(false);
+  const [turnCount, setTurnCount] = useState(0);
 
   const engineRef = useRef<Matter.Engine | null>(null);
   const ballRef = useRef<Matter.Body | null>(null);
   const lastTeleportRef = useRef(0);
   const animFrameRef = useRef<number | null>(null);
   const gameStateRef = useRef<GameState>('PlacingPortal');
+  const entryPortalRef = useRef<PortalState>(INITIAL_ENTRY_PORTAL);
   const exitPortalRef = useRef<PortalState>(DEFAULT_EXIT_PORTAL);
   const arenaLayoutRef = useRef({ x: 0, y: 0 });
+  const arenaViewRef = useRef<View>(null);
 
   useEffect(() => {
     gameStateRef.current = gameState;
   }, [gameState]);
+
+  useEffect(() => {
+    entryPortalRef.current = entryPortal;
+  }, [entryPortal]);
 
   useEffect(() => {
     exitPortalRef.current = exitPortal;
@@ -120,19 +134,24 @@ export default function PortalDropGame() {
       const by = ball.position.y;
       setBallPos({ x: bx, y: by });
 
-      const entryIsHorizontal =
-        ENTRY_PORTAL.side === 'Top' || ENTRY_PORTAL.side === 'Bottom';
+      const currentEntry = entryPortalRef.current;
       if (
-        ballOverlapsPortal(bx, by, ENTRY_PORTAL, entryIsHorizontal) &&
+        ballOverlapsPortal(bx, by, currentEntry) &&
         now - lastTeleportRef.current > TELEPORT_COOLDOWN
       ) {
         const ep = exitPortalRef.current;
-        const angle = signedAngle(ENTRY_PORTAL.normal, ep.normal);
+        const angle = signedAngle(currentEntry.normal, ep.normal);
         const vIn = ball.velocity;
         const speed = magnitude(vIn);
+
+        if (speed < 0.5) {
+          animFrameRef.current = requestAnimationFrame(loop);
+          return;
+        }
+
         let vOut = rotateVec(vIn, angle);
         const outSpeed = magnitude(vOut);
-        if (outSpeed > 0.001 && Math.abs(outSpeed - speed) > 0.001) {
+        if (outSpeed > 0.001) {
           vOut = scale(vOut, speed / outSpeed);
         }
 
@@ -144,12 +163,26 @@ export default function PortalDropGame() {
         teleportBall(ball, exitPos, vOut);
         lastTeleportRef.current = now;
 
+        engine.gravity.y = 0;
+        Matter.Body.setVelocity(ball, { x: 0, y: 0 });
+        Matter.Body.setAngularVelocity(ball, 0);
+
         setTeleportFlash(true);
-        setTimeout(() => setTeleportFlash(false), 120);
+        setTimeout(() => setTeleportFlash(false), 150);
+
+        const newEntry: PortalState = { ...ep };
+        setEntryPortal(newEntry);
+        entryPortalRef.current = newEntry;
+
+        setBallPos({ x: exitPos.x, y: exitPos.y });
+        setTurnCount((c) => c + 1);
+        setGameState('PlacingNextExit');
+        gameStateRef.current = 'PlacingNextExit';
 
         if (Platform.OS !== 'web') {
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
         }
+        return;
       }
 
       animFrameRef.current = requestAnimationFrame(loop);
@@ -167,24 +200,48 @@ export default function PortalDropGame() {
 
   const handleArenaTap = useCallback(
     (e: GestureResponderEvent) => {
-      if (gameStateRef.current === 'Running') return;
+      const currentState = gameStateRef.current;
+      if (currentState === 'Running') return;
 
-      const pageX = e.nativeEvent.pageX;
-      const pageY = e.nativeEvent.pageY;
-      const ax = pageX - arenaLayoutRef.current.x;
-      const ay = pageY - arenaLayoutRef.current.y;
+      let ax: number;
+      let ay: number;
+
+      const ne = e.nativeEvent as any;
+      if (typeof ne.locationX === 'number' && typeof ne.locationY === 'number') {
+        ax = ne.locationX;
+        ay = ne.locationY;
+      } else if (typeof ne.offsetX === 'number' && typeof ne.offsetY === 'number') {
+        ax = ne.offsetX;
+        ay = ne.offsetY;
+      } else if (typeof ne.pageX === 'number' && typeof ne.pageY === 'number') {
+        ax = ne.pageX - arenaLayoutRef.current.x;
+        ay = ne.pageY - arenaLayoutRef.current.y;
+      } else {
+        return;
+      }
+
+      ax = Math.max(0, Math.min(ax, ARENA_WIDTH));
+      ay = Math.max(0, Math.min(ay, ARENA_HEIGHT));
 
       const result = snapToPerimeter({ x: ax, y: ay });
 
-      setExitPortal({
+      const newPortal: PortalState = {
         x: result.position.x,
         y: result.position.y,
         side: result.side,
         normal: result.normal,
-      });
+      };
 
-      if (gameStateRef.current === 'PlacingPortal') {
+      if (portalDistance(newPortal, entryPortalRef.current) < MIN_PORTAL_DISTANCE) {
+        return;
+      }
+
+      setExitPortal(newPortal);
+      exitPortalRef.current = newPortal;
+
+      if (currentState === 'PlacingPortal' || currentState === 'PlacingNextExit') {
         setGameState('Ready');
+        gameStateRef.current = 'Ready';
       }
 
       if (Platform.OS !== 'web') {
@@ -195,8 +252,10 @@ export default function PortalDropGame() {
   );
 
   const handleStart = useCallback(() => {
-    if (gameStateRef.current === 'Running') return;
+    const currentState = gameStateRef.current;
+    if (currentState !== 'Ready') return;
     setGameState('Running');
+    gameStateRef.current = 'Running';
     if (Platform.OS !== 'web') {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
     }
@@ -209,23 +268,26 @@ export default function PortalDropGame() {
 
     resetBall(engine, ball);
     setBallPos({ x: SPAWN_X, y: SPAWN_Y });
-    setGameState('Ready');
+    setEntryPortal(INITIAL_ENTRY_PORTAL);
+    entryPortalRef.current = INITIAL_ENTRY_PORTAL;
+    setExitPortal(DEFAULT_EXIT_PORTAL);
+    exitPortalRef.current = DEFAULT_EXIT_PORTAL;
+    setGameState('PlacingPortal');
+    gameStateRef.current = 'PlacingPortal';
     lastTeleportRef.current = 0;
+    setTurnCount(0);
 
     if (Platform.OS !== 'web') {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     }
   }, []);
 
-  const handleArenaLayout = useCallback(() => {
-    arenaViewRef.current?.measureInWindow((x: number, y: number) => {
-      arenaLayoutRef.current = { x, y };
-    });
-  }, []);
-
-  const arenaViewRef = useRef<View>(null);
-
-  const renderPortal = (portal: PortalState, color: string, glowColor: string) => {
+  const renderPortal = (
+    portal: PortalState,
+    color: string,
+    glowColor: string,
+    label: string
+  ) => {
     const isHorizontal = portal.side === 'Top' || portal.side === 'Bottom';
     const w = isHorizontal ? PORTAL_LENGTH : PORTAL_THICKNESS;
     const h = isHorizontal ? PORTAL_THICKNESS : PORTAL_LENGTH;
@@ -249,7 +311,7 @@ export default function PortalDropGame() {
 
     return (
       <View
-        key={`portal-${color}`}
+        key={`portal-${label}`}
         style={[
           styles.portal,
           {
@@ -280,12 +342,14 @@ export default function PortalDropGame() {
 
   const stateLabel =
     gameState === 'PlacingPortal'
-      ? 'TAP EDGE TO PLACE PORTAL'
-      : gameState === 'Ready'
-        ? 'READY'
-        : 'RUNNING';
+      ? 'PLACE EXIT PORTAL'
+      : gameState === 'PlacingNextExit'
+        ? 'PLACE NEXT EXIT'
+        : gameState === 'Ready'
+          ? 'READY TO DROP'
+          : 'DROPPING';
 
-  const canStart = gameState === 'Ready' || gameState === 'PlacingPortal';
+  const canStart = gameState === 'Ready';
 
   return (
     <View style={[styles.container, { paddingTop: topInset }]}>
@@ -301,18 +365,29 @@ export default function PortalDropGame() {
                     ? '#44FF88'
                     : gameState === 'Ready'
                       ? Colors.accent
-                      : Colors.textDim,
+                      : gameState === 'PlacingNextExit'
+                        ? Colors.exitPortal
+                        : Colors.textDim,
               },
             ]}
           />
           <Text style={styles.stateText}>{stateLabel}</Text>
+          {turnCount > 0 && (
+            <Text style={styles.turnText}>
+              {' \u00B7 '}TURN {turnCount}
+            </Text>
+          )}
         </View>
       </View>
 
       <View style={styles.arenaWrapper}>
         <Pressable
           ref={arenaViewRef}
-          onLayout={handleArenaLayout}
+          onLayout={() => {
+            arenaViewRef.current?.measureInWindow((x: number, y: number) => {
+              arenaLayoutRef.current = { x, y };
+            });
+          }}
           onPress={handleArenaTap}
           style={[
             styles.arena,
@@ -320,11 +395,17 @@ export default function PortalDropGame() {
           ]}
         >
           {renderPortal(
-            ENTRY_PORTAL,
+            entryPortal,
             Colors.entryPortal,
-            Colors.entryPortalGlow
+            Colors.entryPortalGlow,
+            'entry'
           )}
-          {renderPortal(exitPortal, Colors.exitPortal, Colors.exitPortalGlow)}
+          {renderPortal(
+            exitPortal,
+            Colors.exitPortal,
+            Colors.exitPortalGlow,
+            'exit'
+          )}
 
           <View style={styles.spawnIndicator}>
             <View style={styles.spawnCross} />
@@ -352,7 +433,7 @@ export default function PortalDropGame() {
           style={({ pressed }) => [
             styles.button,
             styles.startButton,
-            pressed && styles.buttonPressed,
+            pressed && canStart && styles.buttonPressed,
             !canStart && styles.buttonDisabled,
           ]}
         >
@@ -435,6 +516,12 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: Colors.textDim,
     letterSpacing: 2,
+  },
+  turnText: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 11,
+    color: Colors.exitPortal,
+    letterSpacing: 1,
   },
   arenaWrapper: {
     flex: 1,
