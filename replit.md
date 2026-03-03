@@ -1,7 +1,7 @@
 # Portal Drop — React Native Physics Puzzle Game
 
 ## Overview
-Portal Drop is a 2D physics puzzle prototype built with Expo + React Native + Matter.js. Players place portals on arena boundaries, drop a ball, and watch it teleport between portals with velocity rotation based on wall normals. Features a perpetual loop mechanic where each exit portal becomes the next entry portal.
+Portal Drop is a 2D physics puzzle prototype built with Expo + React Native + Matter.js. Players place portals on arena boundaries, launch a constant-velocity puck, and watch it teleport between portals with velocity rotation based on wall normals. The puck bounces off walls elastically (no gravity) and chains through portals perpetually.
 
 ## Architecture
 - **Frontend**: Expo React Native (single screen, no tabs)
@@ -27,10 +27,11 @@ constants/
 
 ## Game Mechanics
 - **States**: PlacingPortal → Ready → Running → PlacingNextExit → Running → ...
-- **Perpetual motion**: After teleport, ball keeps bouncing (sim stays active via simActiveRef). User places next exit while ball moves — no second DROP needed.
-- **Teleport**: Velocity rotated by signed angle between entry/exit portal normals, speed preserved
-- **Ball physics**: Dynamic body, frozen via gravity=0 (not isStatic). RAF loop runs continuously, physics steps gated by simActiveRef.
-- **Portal placement**: Tap near arena edge, snaps to nearest wall, clamped from corners. Allowed during all states except initial.
+- **Motion model**: Constant-velocity puck (BALL_SPEED=4). No gravity. Velocity normalized every tick.
+- **Wall bounce**: Elastic (restitution 1.0, friction 0). Puck moves in straight lines, bounces off walls.
+- **Perpetual motion**: After teleport, puck keeps moving (sim stays active via simActiveRef). User places next exit while puck moves — no second LAUNCH needed.
+- **Teleport**: Velocity rotated by signed angle between entry/exit portal normals, normalized to BALL_SPEED.
+- **Portal placement**: Tap near arena edge, snaps to nearest wall, clamped from corners. Allowed in all states.
 
 ## Dependencies
 - matter-js (2D physics)

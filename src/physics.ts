@@ -4,6 +4,7 @@ import {
   ARENA_HEIGHT,
   WALL_THICKNESS,
   BALL_RADIUS,
+  BALL_SPEED,
   SPAWN_X,
   SPAWN_Y,
 } from './constants';
@@ -17,7 +18,7 @@ export function createPhysicsWorld() {
   const H = ARENA_HEIGHT;
   const T = WALL_THICKNESS;
 
-  const wallOpts = { isStatic: true, friction: 0.3, restitution: 0.5 };
+  const wallOpts = { isStatic: true, friction: 0, restitution: 1.0 };
 
   const topWall = Matter.Bodies.rectangle(W / 2, -T / 2, W + T * 2, T, wallOpts);
   const bottomWall = Matter.Bodies.rectangle(W / 2, H + T / 2, W + T * 2, T, wallOpts);
@@ -25,10 +26,13 @@ export function createPhysicsWorld() {
   const rightWall = Matter.Bodies.rectangle(W + T / 2, H / 2, T, H + T * 2, wallOpts);
 
   const ball = Matter.Bodies.circle(SPAWN_X, SPAWN_Y, BALL_RADIUS, {
-    restitution: 0.6,
-    friction: 0.1,
-    density: 0.002,
-    frictionAir: 0.001,
+    restitution: 1.0,
+    friction: 0,
+    frictionAir: 0,
+    frictionStatic: 0,
+    density: 0.001,
+    inertia: Infinity,
+    inverseInertia: 0,
   });
 
   Matter.Body.setVelocity(ball, { x: 0, y: 0 });
@@ -38,15 +42,13 @@ export function createPhysicsWorld() {
   return { engine, ball };
 }
 
-export function startBall(engine: Matter.Engine, ball: Matter.Body) {
+export function startBall(_engine: Matter.Engine, ball: Matter.Body) {
   Matter.Body.setPosition(ball, { x: SPAWN_X, y: SPAWN_Y });
-  Matter.Body.setVelocity(ball, { x: 0, y: 0 });
+  Matter.Body.setVelocity(ball, { x: 0, y: BALL_SPEED });
   Matter.Body.setAngularVelocity(ball, 0);
-  engine.gravity.y = 1;
 }
 
-export function resetBall(engine: Matter.Engine, ball: Matter.Body) {
-  engine.gravity.y = 0;
+export function resetBall(_engine: Matter.Engine, ball: Matter.Body) {
   Matter.Body.setPosition(ball, { x: SPAWN_X, y: SPAWN_Y });
   Matter.Body.setVelocity(ball, { x: 0, y: 0 });
   Matter.Body.setAngularVelocity(ball, 0);

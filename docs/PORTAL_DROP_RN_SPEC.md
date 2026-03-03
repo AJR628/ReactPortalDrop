@@ -1,13 +1,13 @@
 # Portal Drop — React Native Spec (SSOT)
 
 ## Overview
-Portal Drop is a 2D physics puzzle prototype with a perpetual loop mechanic. The player places an exit portal on the arena boundary, drops a ball, and the ball teleports from the entry portal to the exit portal with velocity rotated according to portal normals. After each teleport, the exit portal becomes the new entry portal.
+Portal Drop is a 2D physics puzzle prototype with a perpetual loop mechanic. The player places an exit portal on the arena boundary, launches a constant-velocity puck, and the puck teleports from the entry portal to the exit portal with velocity rotated according to portal normals. After each teleport, the exit portal becomes the new entry portal. The puck bounces off walls elastically and moves in straight lines — no gravity, no arcing.
 
 ## Game States
-- **PlacingPortal**: Initial state. User taps arena boundary to place exit portal. Ball is frozen at spawn.
-- **Ready**: Exit portal has been placed. User can reposition it or press Drop.
-- **Running**: Ball is dropping under gravity. Physics active. Teleportation enabled.
-- **PlacingNextExit**: After a successful teleport. The previous exit is now the entry. User places the next exit portal.
+- **PlacingPortal**: Initial state. User taps arena boundary to place exit portal. Puck is frozen at spawn.
+- **Ready**: Exit portal has been placed. User can reposition it or press Launch.
+- **Running**: Puck is moving at constant velocity. Physics active. Teleportation enabled. User can reposition exit portal.
+- **PlacingNextExit**: After a successful teleport. The previous exit is now the entry. User places the next exit portal. Puck keeps moving.
 - Reset returns to **PlacingPortal** (full reset to initial state).
 
 ## Coordinate System
@@ -29,22 +29,32 @@ Computed at runtime:
 - `arenaHeight = round(arenaWidth * 1.6)` (10:16 ratio)
 - Stored as `{ left: 0, top: 0, right: arenaWidth, bottom: arenaHeight, width, height }`
 
-## Ball Physics (Authoritative)
-- Ball is created as a **dynamic** body (never `isStatic: true`).
-- Freeze is achieved by setting `engine.gravity.y = 0` and zeroing velocity.
-- On DROP: reset position to spawn, zero velocity, set `engine.gravity.y = 1`, start stepping.
-- On RESET: set `engine.gravity.y = 0`, zero velocity, move to spawn, clear cooldown.
+## Puck Physics (Authoritative)
+- Motion model: constant-velocity straight trajectory (no gravity).
+- `engine.gravity.y = 0` always. Gravity is never enabled.
+- `BALL_SPEED = 4` px per physics tick. Every tick, velocity is normalized: `v = normalize(v) * BALL_SPEED`.
+- If speed drops near zero (e.g. degenerate collision), re-seed direction to `(0, BALL_SPEED)` (straight down).
+- Ball body: `restitution: 1.0`, `friction: 0`, `frictionAir: 0`, `frictionStatic: 0`.
+- Wall bodies: `restitution: 1.0`, `friction: 0`.
+- On LAUNCH: position to spawn, set velocity `(0, BALL_SPEED)` (straight down).
+- On RESET: zero velocity, move to spawn.
+
+## Wall Bounce
+- Walls bounce the puck elastically (restitution 1.0, zero friction).
+- After bounce, velocity is normalized back to BALL_SPEED on the next tick.
+- Puck can bounce back through portals naturally.
 
 ## Teleport Rule (Authoritative)
 ```
 angle = signedAngle(entryNormal, exitNormal)
 vOut = rotate(vIn, angle)
-speed is preserved (normalize vOut to original speed magnitude)
-teleportPosition = exitPortalCenter + exitNormal * (ballRadius + 5)
+vOut = normalize(vOut) * BALL_SPEED
+teleportPosition = exitPortalCenter + exitNormal * TELEPORT_OFFSET
+TELEPORT_OFFSET = BALL_RADIUS + PORTAL_THICKNESS/2 + 2
 cooldown = 150ms
 ```
 
-Minimum ball speed for teleport: 0.5 (avoids teleporting a near-stationary ball).
+If vOut speed is near zero after rotation, fall back to `exitNormal * BALL_SPEED`.
 
 ### signedAngle
 `atan2(a.x * b.y - a.y * b.x, a.x * b.x + a.y * b.y)`
@@ -58,13 +68,14 @@ y' = x * sin(angle) + y * cos(angle)
 ## Perpetual Loop Rule
 After a successful teleport:
 1. The exit portal becomes the new entry portal.
-2. Ball velocity is zeroed and gravity disabled (ball freezes at teleport position).
+2. Puck keeps moving at constant velocity (sim stays active via simActiveRef).
 3. Game state transitions to `PlacingNextExit`.
-4. User places a new exit portal and presses DROP to repeat.
-5. Ball always drops from the spawn point (top center).
+4. User places a new exit portal (tapping transitions directly back to Running — no second LAUNCH needed).
+5. Puck continues bouncing until it hits the new entry portal.
 
 ### Placement constraint
 Exit portal must be at least `MIN_PORTAL_DISTANCE` (40px) from the current entry portal. Placements too close are ignored.
+Placement is allowed in all states (PlacingPortal, Ready, PlacingNextExit, Running).
 
 ## Snap-to-Boundary Algorithm
 Given a tap point in arena coordinates (using `locationX`/`locationY`):
@@ -77,27 +88,28 @@ Given a tap point in arena coordinates (using `locationX`/`locationY`):
 
 ## Critical Rules
 - Teleport triggers ONLY on entry portal overlap. Exit portal does NOT teleport.
-- Ball is created dynamic; freeze is via gravity = 0 + velocity = 0 (NOT isStatic).
+- Gravity is ALWAYS off. Motion is constant-velocity only.
 - Arena tap handler uses `locationX`/`locationY` for coordinates relative to the arena.
 - Cooldown prevents re-teleport for 150ms after each teleport.
-- After teleport, gravity is disabled and ball freezes until next DROP.
+- After teleport, puck keeps moving. No freeze, no re-drop from spawn.
+- Speed is forced constant every physics tick via normalization.
 
 ## Script Responsibilities
 | File | Purpose |
 |------|---------|
-| `src/constants.ts` | Arena dimensions, physics constants, portal defaults, game states |
+| `src/constants.ts` | Arena dimensions, physics constants (incl. BALL_SPEED), portal defaults, game states |
 | `src/math.ts` | Vector rotation, signed angle, magnitude |
 | `src/snap.ts` | Snap-to-perimeter algorithm |
-| `src/physics.ts` | Matter.js engine creation, ball start/reset/teleport |
-| `app/index.tsx` | Main game screen, rendering, game loop, input, perpetual loop |
+| `src/physics.ts` | Matter.js engine creation (zero-gravity, elastic walls), ball start/reset/teleport |
+| `app/index.tsx` | Main game screen, rendering, game loop with speed normalization, input, perpetual loop |
 
 ## Acceptance Checks
-1. Tap inside arena near an edge → exit portal snaps to nearest edge, clamped from corners.
-2. Press Drop → ball drops from spawn under gravity.
-3. Ball overlaps entry portal → teleports to exit portal with rotated velocity.
-4. After teleport, UI shows "Place next exit"; placing + DROP repeats the cycle.
-5. Reset always returns to initial state; ball always drops after reset.
-6. Exit on left wall → ball exits moving rightward. Exit on top → ball exits moving downward.
+1. Press LAUNCH: puck moves straight down at constant speed (no curve, no arc).
+2. Puck hits a wall: bounces elastically, continues at same constant speed.
+3. Place EXIT on left wall: puck enters ENTRY then exits left portal moving rightward (straight).
+4. While puck moves, place a new EXIT on top wall. Next time puck hits ENTRY, it teleports correctly.
+5. If puck misses ENTRY and hits a wall, it bounces. If it bounces back through the portal it came out of, it teleports again per the current entry/exit chain.
+6. RESET restores initial spawn + ENTRY/EXIT defaults and puck is stopped until LAUNCH.
 
 ## Non-Goals (MVP)
 - No level system
@@ -109,13 +121,16 @@ Given a tap point in arena coordinates (using `locationX`/`locationY`):
 ## Decision Log
 | Decision | Rationale |
 |----------|-----------|
+| Constant-velocity puck instead of gravity drop | Straight-line motion makes portal chaining predictable and strategic |
+| Speed normalized every tick | Prevents energy loss/gain from wall bounces or floating point drift |
+| Restitution 1.0, friction 0 everywhere | Perfectly elastic bounces preserve puck behavior |
+| BALL_SPEED = 4 | Balanced speed: visible motion without being too fast to track at 60fps |
 | Use Matter.js directly instead of react-native-game-engine | Simpler, fewer dependencies, requestAnimationFrame loop is sufficient |
 | Ball overlap check uses AABB expansion instead of Matter.js sensors | More reliable, avoids sensor quirks |
-| Ball created dynamic, frozen via gravity=0 | `setStatic(false)` is unreliable in matter-js; gravity toggle is deterministic |
-| After teleport, ball keeps moving while user places next exit | Continuous motion via simActiveRef decoupled from gameState |
+| After teleport, puck keeps moving while user places next exit | Continuous motion via simActiveRef decoupled from gameState |
 | Portals rendered as colored bars flush with arena wall | Simple, clear visual indicator |
 | Entry portal is dynamic state (not constant) for perpetual loop | Exit becomes entry after each teleport |
 | MIN_PORTAL_DISTANCE = 40px prevents exit overlapping entry | Avoids degenerate teleport loops |
 | Tap coordinates use locationX/locationY | Reliable relative coordinates without measureInWindow |
 | Fixed timestep 16.67ms (60fps) for Matter.js | Deterministic feel |
-| Ball speed minimum 0.5 for teleport trigger | Prevents teleporting a near-stationary ball |
+| Re-seed velocity to (0, BALL_SPEED) if speed ~0 | Prevents puck from getting stuck |

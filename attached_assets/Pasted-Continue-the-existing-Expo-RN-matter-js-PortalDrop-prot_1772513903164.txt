@@ -1,0 +1,70 @@
+Continue the existing Expo + RN + matter-js PortalDrop prototype. Current behavior: ball drops with gravity, teleports once, but exits with an arcing trajectory and subsequent portal placements don’t consistently trigger. We are changing the game rule: NO GRAVITY ball-drop; instead it becomes a constant-velocity straight-moving puck with wall bounces and perpetual portal chaining.
+
+NEW CORE RULES (authoritative)
+1) Motion model: constant straight trajectory (puck)
+- After pressing DROP, the ball moves at a constant speed in a straight line.
+- Gravity must be OFF (engine.gravity.y = 0 always).
+- The ball’s speed magnitude must be forced constant each tick: |v| = BALL_SPEED.
+- No “arching” is allowed. The only direction changes are:
+  - wall bounces (elastic reflection)
+  - portal teleport rotation mapping (see below)
+
+2) Wall bounce
+- Arena walls bounce the puck (restitution ~1.0).
+- If puck hits a wall, it reflects and continues at the same constant speed.
+- This makes it possible for the puck to bounce back through portals naturally.
+
+3) Portal behavior: perpetual chaining
+- There is always a current ENTRY portal (sensor) and an EXIT portal (sensor).
+- When the puck overlaps ENTRY portal sensor, it teleports to EXIT portal:
+  - Preserve speed and rotate velocity by signedAngle(entryNormal, exitNormal)
+  - Teleport position = exitPos + exitNormal * TELEPORT_OFFSET
+  - Cooldown 150ms to prevent immediate re-trigger
+- After teleport: the EXIT portal becomes the new ENTRY portal (perpetual).
+- User can place a NEW EXIT portal at any time (even while puck moves).
+- When user places the new EXIT, it becomes the active EXIT immediately.
+
+4) Placement + gating rules
+- User taps boundary to place the EXIT portal (snap-to-perimeter, corner clamp, tie-break Top→Bottom→Left→Right, quantize OFF).
+- Prevent placing EXIT too close to ENTRY (min distance threshold, e.g. 40px) so they can’t overlap.
+- Placement should work while puck is moving.
+
+WHAT TO FIX (specific)
+A) Remove gravity drop / arcing:
+- Do not use engine.gravity for motion.
+- On DROP: set an initial velocity straight down from spawn (or straight up—pick one and document), e.g. v=(0, BALL_SPEED).
+- Every simulation tick (each Engine.update), normalize the puck velocity back to BALL_SPEED:
+  v = normalize(v) * BALL_SPEED  (if speed ~0, re-seed direction to downward)
+- Make wall restitution near 1.0 and friction near 0 so it doesn’t lose energy.
+
+B) Make portals always active and ensure next portal triggers:
+- CollisionStart handler must always use CURRENT entryPortal and exitPortal references (not stale captured variables).
+- Ensure when “exit becomes entry”, the entryPortal body and its side/normal state updates correctly.
+- Ensure cooldown clears and does not prevent next teleport beyond 150ms.
+- Ensure teleport offset places puck fully outside the portal sensor so it doesn’t stick, but still can re-enter later.
+- After teleport: Matter.Sleeping.set(ball, false).
+
+C) Bounce + portal loop sanity:
+- If puck exits EXIT portal toward arena, and later bounces back to that same wall, it should be able to pass through that same portal again if it overlaps the ENTRY sensor (since EXIT became ENTRY).
+
+FILES TO MODIFY (minimal)
+- app/index.tsx (game loop, DROP/RESET actions, placement allowed while moving)
+- src/physics.ts (ball body options, collision events, teleport function)
+- src/constants.ts (BALL_SPEED, TELEPORT_OFFSET, portal sizes)
+- docs/PORTAL_DROP_RN_SPEC.md (update to reflect constant-velocity puck rules)
+
+CONSTANTS TO ADD / LOCK
+- BALL_SPEED: choose a stable value (e.g. 6–10 px per ms equivalent depending on timestep; document it).
+- engine timestep: fixed dt 1000/60 ms (or existing).
+- restitution: 1.0
+- friction: 0.0
+- TELEPORT_OFFSET: ballRadius + portalThickness/2 + 2
+
+ACCEPTANCE CHECKS
+1) Press DROP: puck moves straight (no curve) at constant speed.
+2) Place EXIT on left wall: puck enters ENTRY then exits left portal moving right into arena (straight).
+3) While puck moves, place a new EXIT on top wall. Next time puck hits ENTRY, it teleports to the new EXIT correctly.
+4) If puck misses ENTRY and hits a wall, it bounces. If it bounces back through the portal it came out of, it teleports again per the current entry/exit chain.
+5) RESET restores initial spawn + ENTRY/EXIT defaults and puck is stopped until DROP.
+
+IMPORTANT: Do not add new features (no goals, no obstacles, no UI overhaul). Only implement constant-velocity puck, perpetual portal chain, bounce correctness, and reliable placement triggering.

@@ -14,6 +14,7 @@ export const CORNER_MARGIN = 16;
 export const SPAWN_X = ARENA_WIDTH / 2;
 export const SPAWN_Y = BALL_RADIUS + 40;
 
+export const BALL_SPEED = 4;
 export const TELEPORT_COOLDOWN = 150;
 export const TELEPORT_OFFSET = BALL_RADIUS + (PORTAL_THICKNESS / 2) + 2;
 export const MIN_PORTAL_DISTANCE = 40;
